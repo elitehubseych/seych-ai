@@ -119,7 +119,7 @@ RULES_TEXT = """
 
 def get_user_name(user_id: int) -> str:
     if user_id == ADMIN_VK_ID:
-        return "Разработчик"
+        return "💀"
     try:
         user_info = vk.users.get(user_ids=user_id, fields='first_name')
         if user_info:
