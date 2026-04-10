@@ -176,6 +176,15 @@ def is_asking_about_name(message_text: str) -> bool:
     return False
 
 
+def remove_all_symbol(text: str) -> str:
+    """Полностью удаляет символ @ перед all и заменяет на безопасный вариант"""
+    # Заменяем @all на all (без собаки)
+    text = re.sub(r'@all', 'all', text, flags=re.IGNORECASE)
+    text = re.sub(r'@everyone', 'всех', text, flags=re.IGNORECASE)
+    text = re.sub(r'@', '', text)
+    return text
+
+
 def find_rule_by_query(question: str) -> str:
     """Ищет правило по запросу пользователя (локально)"""
     question_lower = question.lower()
@@ -184,9 +193,9 @@ def find_rule_by_query(question: str) -> str:
     if 'меньше 16' in question_lower or '16 лет' in question_lower or 'возраст' in question_lower:
         return "📋 **Пункт 1.3**: Участие разрешено только лицам старше 16 лет. Нарушение влечет немедленное исключение (/kick)."
     
-    # Вопрос про @all ночью
-    if ('@all' in question_lower or 'упоминание всех' in question_lower or 'all ночью' in question_lower) and ('ночь' in question_lower or '00:00' in question_lower or '08:00' in question_lower):
-        return "📋 **Пункт 6.1**: Команда @all (упоминание всех) запрещена с 00:00 до 08:00 по МСК. Нарушитель получит мут на 60-120 минут. Я не рекомендую использовать @all ночью, так как это нарушение правил! ⚠️"
+    # Вопрос про all ночью
+    if ('all' in question_lower or 'упоминание всех' in question_lower) and ('ночь' in question_lower or '00:00' in question_lower or '08:00' in question_lower):
+        return "📋 **Пункт 6.1**: Команда all (упоминание всех) запрещена с 00:00 до 08:00 по МСК. Нарушитель получит мут на 60-120 минут. Я не рекомендую использовать all ночью, так как это нарушение правил! ⚠️"
     
     # Вопрос "сколько пунктов" или "перечисли все"
     if 'сколько пунктов' in question_lower or 'перечисли все' in question_lower or 'какие пункты' in question_lower:
@@ -247,11 +256,13 @@ def generate_ai_response(message: str, user_name: str) -> str:
     
     # Проверяем, спрашивают ли о создателе
     if is_asking_about_creator(message):
-        return f"Меня создал [id{ADMIN_VK_ID}|Разработчик] 👨‍💻"
+        response = f"Меня создал [id{ADMIN_VK_ID}|Разработчик] 👨‍💻"
+        return remove_all_symbol(response)
     
     # Проверяем, спрашивают ли как зовут
     if is_asking_about_name(message):
-        return "Меня зовут Сейч! Я бот-помощник в беседе Э᧘ᥙТᥲ Կᥲᴛ. А тебя как зовут? 😊"
+        response = "Меня зовут Сейч! Я бот-помощник в беседе Э᧘ᥙТᥲ Կᥲᴛ. А тебя как зовут? 😊"
+        return remove_all_symbol(response)
     
     # Получаем текст без ключевого слова
     clean_message = message
@@ -264,15 +275,15 @@ def generate_ai_response(message: str, user_name: str) -> str:
     # Сначала проверяем локально по правилам
     rule_answer = find_rule_by_query(clean_message)
     if rule_answer:
-        # Заменяем @all на "упоминание всех" для безопасности
-        rule_answer = rule_answer.replace('@all', 'all (упоминание всех)')
+        rule_answer = remove_all_symbol(rule_answer)
         return rule_answer
     
     prompt = f"""Ты — бот по имени Сейч в беседе Э᧘ᥙТᥲ Կᥲᴛ. Ты общаешься с пользователем {user_name}.
 
-ВАЖНОЕ ПРАВИЛО:
-- НИКОГДА не пиши в ответах символы "@" или "all". Вместо этого пиши "упоминание всех".
-- Если пользователь спрашивает про команду all ночью, объясни что это нарушение правил, но не используй сам символ @.
+ВАЖНЕЙШЕЕ ПРАВИЛО:
+- ЗАПРЕЩЕНО использовать символ "@" в ответах.
+- Вместо "@all" пиши просто "all"
+- Вместо "@everyone" пиши "всех"
 
 ОТВЕЧАЙ КРАТКО И ПО ДЕЛУ:
 
@@ -295,9 +306,8 @@ def generate_ai_response(message: str, user_name: str) -> str:
         )
         response = completion.choices[0].message.content
         
-        # Финальная защита: заменяем @all на безопасный вариант
-        response = response.replace('@all', 'all (упоминание всех)')
-        response = response.replace('@everyone', 'всех')
+        # Принудительно удаляем все @
+        response = remove_all_symbol(response)
         
         # Защита от упоминания создателя
         if not is_asking_about_creator(message):
@@ -472,8 +482,8 @@ if __name__ == '__main__':
     print("=" * 50)
     print("📋 ОСОБЕННОСТИ:")
     print("   ✅ Бот НЕ использует @all в ответах")
-    print("   ✅ Пишет 'all (упоминание всех)' вместо @all")
-    print("   ✅ Не берет вину за ночные @all на себя")
+    print("   ✅ Пишет 'all' вместо '@all'")
+    print("   ✅ Принудительно удаляет символ @")
     print("=" * 50)
     
     app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
