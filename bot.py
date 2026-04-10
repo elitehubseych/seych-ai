@@ -254,17 +254,7 @@ def find_rule_by_query(question: str) -> str:
 
 
 def generate_ai_response(message: str, user_name: str) -> str:
-    """Генерация ответа через Groq с учетом правил"""
-    
-    # Проверяем, спрашивают ли о создателе
-    if is_asking_about_creator(message):
-        response = f"Меня создал [id{ADMIN_VK_ID}|Разработчик] 👨‍💻"
-        return safe_text(response)
-    
-    # Проверяем, спрашивают ли как зовут
-    if is_asking_about_name(message):
-        response = "Меня зовут Сейч! Я бот-помощник в беседе Э᧘ᥙТᥲ Կᥲᴛ. А тебя как зовут? 😊"
-        return safe_text(response)
+    """Генерация ответа через Groq"""
     
     # Получаем текст без ключевого слова
     clean_message = message
@@ -274,27 +264,53 @@ def generate_ai_response(message: str, user_name: str) -> str:
             clean_message = clean_message.lstrip(',').strip()
             break
     
-    # Сначала проверяем локально по правилам
-    rule_answer = find_rule_by_query(clean_message)
-    if rule_answer:
-        return safe_text(rule_answer)
+    # Проверяем, спрашивают ли о создателе
+    if is_asking_about_creator(message):
+        return "Я не хочу говорить об этом, мне кажется и вам не нужно знать! 😊"
     
-    prompt = f"""Ты — бот по имени Сейч в беседе Э᧘ᥙТᥲ Կᥲᴛ. Ты общаешься с пользователем {user_name}.
+    # Проверяем, спрашивают ли как зовут
+    if is_asking_about_name(message):
+        return "Меня зовут Сейч! Приятно познакомиться! 😊"
+    
+    # Проверяем, спрашивают ли о конкретном пункте правил
+    match = re.search(r'(\d+)[\.](\d+)', clean_message)
+    if match:
+        punkt = f"{match.group(1)}.{match.group(2)}"
+        rule = get_rule_by_punkt(punkt)
+        if rule:
+            return safe_text(f"📋 **Пункт {punkt}**: {rule}")
+    
+    # Проверяем, спрашивают ли о правилах в целом
+    if is_asking_about_rules(message):
+        prompt = f"""Ты бот Сейч. Пользователь {user_name} спросил о правилах: "{clean_message}"
 
-ВАЖНЕЙШЕЕ ПРАВИЛО:
-- ЗАПРЕЩЕНО использовать слова "all", "@all" в ответах.
-- ВСЕГДА заменяй их на "упоминание всех".
-- Например: "команда all" → "команда упоминание всех"
+ВОТ ПОЛНЫЕ ПРАВИЛА (отвечай по ним):
+1.3 - Участие только с 16 лет
+3.1 - Спам/флуд: мут 30 мин
+3.3 - Оскорбления участников: мут 30 мин или бан 3-7 дней
+4.1 - Угрозы: бессрочный бан
+5.1 - Оскорбление админов: мут 180 мин до бана 10 дней
+6.1 - Упоминание всех ночью: мут 60-120 мин
 
-ОТВЕЧАЙ КРАТКО И ПО ДЕЛУ:
+Ответь кратко и по существу, 3-5 предложений. Используй эмодзи."""
+    else:
+        # Обычный разговор - никаких правил, никакого создателя!
+        prompt = f"""Ты бот Сейч. Ты общаешься с пользователем {user_name}.
 
-1. Если спрашивают "можно ли использовать all ночью?" - ответь: "Согласно пункту 6.1 правил, команда упоминание всех запрещена с 00:00 до 08:00 по МСК. За это дают мут на 60-120 минут. Лучше не рисковать! ⚠️"
+ТЫ ОБЫЧНЫЙ ДРУЖЕЛЮБНЫЙ СОБЕСЕДНИК!
+- НЕ ГОВОРИ о правилах, если не спросили
+- НЕ ГОВОРИ о создателе (ты не хочешь об этом говорить)
+- НЕ ГОВОРИ "меня создал"
+- НЕ УПОМИНАЙ что кто-то нарушает правила
+- Если тебе говорят "согласен" или "согласна" - просто порадуйся за человека, не связывай с правилами
+- Будь веселым, с юмором, поддерживай разговор
 
-2. Если просто общаются - отвечай дружелюбно, 2-3 предложения.
+ОТВЕЧАЙ РАЗВЕРНУТО: 3-5 предложений, как в реальном диалоге с другом. Не отвечай одним словом или одним предложением!
 
-Сейчас пользователь написал: "{clean_message}"
-"""
+Пользователь написал: "{clean_message}"
 
+Ответь естественно, развернуто (3-5 предложений). Используй эмодзи, которые подходят по ситуацию пользователя"""
+    
     try:
         completion = groq_client.chat.completions.create(
             model="llama-3.1-8b-instant",
@@ -302,24 +318,25 @@ def generate_ai_response(message: str, user_name: str) -> str:
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": clean_message}
             ],
-            max_tokens=300,
-            temperature=0.7
+            max_tokens=500,  # Увеличено с 250 до 500
+            temperature=0.8
         )
         response = completion.choices[0].message.content
-        
-        # Принудительно заменяем all на упоминание всех
         response = safe_text(response)
         
-        # Защита от упоминания создателя
-        if not is_asking_about_creator(message):
-            creator_keywords = ['разработчик', 'создал', 'создатель', 'меня создал']
-            if any(keyword in response.lower() for keyword in creator_keywords):
-                response = "Ха-ха, забавно! 😄 А по правилам беседы Э᧘ᥙТᥲ Կᥲᴛ что-нибудь интересное узнать хочешь?"
+        # Финальная защита
+        if 'правил' in response.lower() and not is_asking_about_rules(message):
+            response = "😊 Продолжаем общение! Что еще интересного?"
+        
+        # Если ответ слишком короткий (меньше 50 символов и не вопрос о правилах)
+        if len(response) < 50 and not is_asking_about_rules(message) and not is_asking_about_creator(message):
+            response += " А у тебя как дела? Расскажи что-нибудь интересное! 😊"
         
         return response
     except Exception as e:
         logger.error(f"Ошибка Groq: {e}")
         return "Ой, что-то пошло не так! Попробуй еще раз 😊"
+
 
 
 def send_vk_message(peer_id: int, text: str, reply_to_conv_id: int = None):
