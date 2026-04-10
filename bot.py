@@ -2,6 +2,8 @@ import os
 import logging
 import json
 import time
+import threading
+import requests
 
 from flask import Flask, request, jsonify
 import vk_api
@@ -9,7 +11,7 @@ from vk_api.utils import get_random_id
 from dotenv import load_dotenv
 from groq import Groq
 
-# Загрузка переменных окружения
+# Загрузка переменных окружения (для локальной разработки)
 load_dotenv()
 
 # ========== КОНФИГУРАЦИЯ ==========
@@ -17,41 +19,50 @@ VK_TOKEN = os.getenv('VK_GROUP_TOKEN')
 VK_GROUP_ID = int(os.getenv('VK_GROUP_ID', '0'))
 GROQ_API_KEY = os.getenv('GROQ_API_KEY')
 ADMIN_VK_ID = int(os.getenv('ADMIN_VK_ID', '0'))
+RENDER_URL = os.getenv('RENDER_URL', 'https://seych-ai.onrender.com')
 
 CONFIRMATION_CODE = "b58f1e09"
 PORT = int(os.getenv('PORT', 5000))
 
-# Настройка логирования
+# Настройка логирования - ТОЛЬКО ОШИБКИ и ВАЖНОЕ
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
+# Отключаем лишние логи от werkzeug
+werkzeug_logger = logging.getLogger('werkzeug')
+werkzeug_logger.setLevel(logging.ERROR)
+
+# Отключаем httpx логи
+httpx_logger = logging.getLogger('httpx')
+httpx_logger.setLevel(logging.WARNING)
+
 # ========== ПРОВЕРКИ ==========
 if not VK_TOKEN:
-    logger.error("❌ Неверный или отсутствует VK_GROUP_TOKEN в .env")
+    logger.error("❌ VK_GROUP_TOKEN не найден в переменных окружения")
     exit(1)
 
 if not GROQ_API_KEY:
-    logger.error("❌ GROQ_API_KEY не найден в .env")
+    logger.error("❌ GROQ_API_KEY не найден в переменных окружения")
     exit(1)
 
 # Инициализация VK API
 try:
     vk_session = vk_api.VkApi(token=VK_TOKEN)
     vk = vk_session.get_api()
-    logger.info("✅ VK API инициализирован успешно")
+    logger.info("✅ VK API инициализирован")
 except Exception as e:
-    logger.error(f"❌ Ошибка инициализации VK API: {e}")
+    logger.error(f"❌ Ошибка VK API: {e}")
     exit(1)
 
 # Инициализация Groq
 try:
     groq_client = Groq(api_key=GROQ_API_KEY)
-    logger.info("✅ Groq API инициализирован успешно")
+    logger.info("✅ Groq API инициализирован")
 except Exception as e:
-    logger.error(f"❌ Ошибка инициализации Groq: {e}")
+    logger.error(f"❌ Ошибка Groq: {e}")
     exit(1)
 
 app = Flask(__name__)
@@ -62,9 +73,9 @@ KEYWORDS = ['seych', 'seychik', 'сейч', 'сейчик']
 # Состояние ИИ для чатов
 ai_enabled_status = {}
 
-# Защита от дублирования - используем event_id вместо message_id
+# Защита от дублирования
 processed_events = {}
-PROCESSED_EXPIRE = 60  # Храним ID события 60 секунд
+PROCESSED_EXPIRE = 60
 
 # Команды управления ИИ
 AI_ON_COMMANDS = ['сейч +ии', 'сейчик +ии', 'сейч +ai', 'seych +ii', 'seych +ai']
@@ -110,6 +121,10 @@ RULES_TEXT = """
 6.2. Дискуссии на сложные темы: обсуждение политики с целью оскорбления запрещено. Наказание: Мут на 60-120 минут.
 6.3. Администрация может применять наказания за действия, вредящие сообществу, даже если они не прописаны в правилах.
 6.4. Администрация может изменять правила без уведомления.
+
+ИНФОРМАЦИЯ ОБ АДМИНИСТРАЦИИ:
+- Администраторы - это люди, которые следят за порядком в беседе, выдают наказания за нарушения правил и помогают участникам.
+- Создатель бота - разработчик. Ссылка на него: [id{ADMIN_VK_ID}|Разработчик]
 """
 
 
@@ -121,8 +136,7 @@ def get_user_name(user_id: int) -> str:
         if user_info:
             return user_info[0].get('first_name', 'Пользователь')
         return 'Пользователь'
-    except Exception as e:
-        logger.error(f"Ошибка получения имени: {e}")
+    except Exception:
         return 'Пользователь'
 
 
@@ -134,9 +148,9 @@ def set_ai_status(peer_id: int, enabled: bool, user_id: int) -> str:
     ai_enabled_status[peer_id] = enabled
     user_name = get_user_name(user_id)
     if enabled:
-        return f"[id{user_id}|{user_name}], 🤖 Искусственный интеллект **включен** ✅"
+        return f"[id{user_id}|{user_name}], 🤖 ИИ включен ✅"
     else:
-        return f"[id{user_id}|{user_name}], 💤 Искусственный интеллект **выключен** ❌"
+        return f"[id{user_id}|{user_name}], 💤 ИИ выключен ❌"
 
 
 def check_ai_command(message_text: str) -> tuple:
@@ -155,35 +169,29 @@ def check_ai_command(message_text: str) -> tuple:
 def is_bot_mentioned(message_text: str) -> bool:
     if not message_text:
         return False
-    message_lower = message_text.lower()
-    return any(keyword in message_lower for keyword in KEYWORDS)
+    return any(keyword in message_text.lower() for keyword in KEYWORDS)
 
 
 def generate_ai_response(message: str, user_name: str) -> str:
-    prompt = f"""Ты — бот по имени Сейч в беседе ВКонтакте. Тебя создал разработчик с VK ID {ADMIN_VK_ID}.
+    prompt = f"""Ты — бот Сейч в ВК. Тебя создал разработчик [id{ADMIN_VK_ID}|Разработчик].
 
-Вот полные правила беседы:
-
+Правила беседы:
 {RULES_TEXT}
 
-ВАЖНОЕ УТОЧНЕНИЕ ПО ПУНКТАМ ПРАВИЛ:
-- Пункт 3.3 = оскорбления ОБЫЧНЫХ УЧАСТНИКОВ. Наказание: мут 30 минут или бан 3-7 дней.
-- Пункт 5.1 = оскорбления АДМИНИСТРАЦИИ. Наказание: мут от 180 минут до бана на 10 дней.
-
 ПРАВИЛА ОТВЕТА:
-1. Если спрашивают про оскорбление АДМИНА - пункт 5.1.
-2. Если спрашивают про оскорбление ОБЫЧНОГО УЧАСТНИКА - пункт 3.3.
-3. Если спрашивают кто создал - ответь: "Меня создал [id{ADMIN_VK_ID}|Разработчик]".
-4. Если просто здороваются - ответь дружелюбно.
-
-Запомни: АДМИН = пункт 5.1. ОБЫЧНЫЙ УЧАСТНИК = пункт 3.3.
+1. "кто такие администраторы" → "Администраторы следят за порядком, выдают наказания и помогают участникам 👑"
+2. "кто тебя создал" → "Меня создал [id{ADMIN_VK_ID}|Разработчик] 👨‍💻"
+3. Про оскорбление АДМИНА → пункт 5.1 (мут 180 мин до бана 10 дней) ⚠️
+4. Про оскорбление УЧАСТНИКА → пункт 3.3 (мут 30 мин или бан 3-7 дней) ⚠️
+5. Всегда используй 1-2 эмодзи в ответе 😊👍
 """
+
     try:
         completion = groq_client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[
                 {"role": "system", "content": prompt},
-                {"role": "user", "content": f"Пользователь {user_name}: {message}"}
+                {"role": "user", "content": f"{user_name}: {message}"}
             ],
             max_tokens=350,
             temperature=0.5
@@ -191,7 +199,7 @@ def generate_ai_response(message: str, user_name: str) -> str:
         return completion.choices[0].message.content
     except Exception as e:
         logger.error(f"Ошибка Groq: {e}")
-        return "Извините, произошла ошибка. Попробуйте позже."
+        return "Ошибка, попробуйте позже 😔"
 
 
 def send_vk_message(peer_id: int, text: str, reply_to_conv_id: int = None):
@@ -210,7 +218,6 @@ def send_vk_message(peer_id: int, text: str, reply_to_conv_id: int = None):
             }, ensure_ascii=False)
             params['forward'] = forward_data
         vk.messages.send(**params)
-        logger.info(f"✅ Сообщение отправлено")
     except Exception as e:
         logger.error(f"Ошибка отправки: {e}")
 
@@ -219,9 +226,6 @@ def handle_message(user_id: int, message_text: str, peer_id: int,
                    conv_msg_id: int = None, is_reply_to_bot: bool = False):
     if not message_text:
         return
-    
-    user_name = get_user_name(user_id)
-    logger.info(f"📨 {user_name}: {message_text[:50]}")
     
     # Проверка команд ИИ
     is_command, command_action = check_ai_command(message_text)
@@ -232,7 +236,6 @@ def handle_message(user_id: int, message_text: str, peer_id: int,
             send_vk_message(peer_id, set_ai_status(peer_id, False, user_id))
         return
     
-    # Проверка нужно ли отвечать
     if not is_ai_enabled(peer_id):
         return
     
@@ -240,7 +243,7 @@ def handle_message(user_id: int, message_text: str, peer_id: int,
     if not should_reply:
         return
     
-    # Генерация ответа
+    user_name = get_user_name(user_id)
     ai_response = generate_ai_response(message_text, user_name)
     
     if ai_response.strip():
@@ -248,35 +251,46 @@ def handle_message(user_id: int, message_text: str, peer_id: int,
         send_vk_message(peer_id, final_message, conv_msg_id)
 
 
-# ========== ГЛАВНЫЙ ОБРАБОТЧИК ==========
+# ========== АВТОПИНГ (чтобы Render не усыпил бота) ==========
+def self_ping():
+    """Пинг самого себя каждые 4 минуты, чтобы Render не отключал"""
+    while True:
+        time.sleep(240)  # 4 минуты
+        try:
+            response = requests.get(f"{RENDER_URL}/ping", timeout=10)
+            if response.status_code == 200:
+                pass  # Молча пингуем, не засоряем консоль
+        except Exception:
+            pass  # Ошибки не логируем
+
+
+# Запускаем автопинг в отдельном потоке
+ping_thread = threading.Thread(target=self_ping, daemon=True)
+ping_thread.start()
+
+
+# ========== ОБРАБОТЧИКИ ==========
 @app.route('/', methods=['GET', 'POST'])
 @app.route('/seych/ai.php', methods=['GET', 'POST'])
 def callback_handler():
-    """Обработчик Callback API"""
-    
     if request.method == 'GET':
         return "VK Callback Bot is running!", 200
     
     try:
         data = request.get_json()
         
-        # Confirmation
         if data.get('type') == 'confirmation':
             return CONFIRMATION_CODE, 200, {'Content-Type': 'text/plain'}
         
-        # Обработка сообщения
         if data.get('type') == 'message_new':
             event_id = data.get('event_id')
             
-            # ЗАЩИТА ОТ ДУБЛИРОВАНИЯ по event_id
             if event_id in processed_events:
-                logger.info(f"⏭️ Пропускаем дубликат события: {event_id}")
                 return 'ok', 200
             
-            # Сохраняем event_id
             processed_events[event_id] = time.time()
             
-            # Очистка старых событий
+            # Очистка старых
             current_time = time.time()
             expired = [eid for eid, ts in processed_events.items() if current_time - ts > PROCESSED_EXPIRE]
             for eid in expired:
@@ -284,11 +298,9 @@ def callback_handler():
             
             message_obj = data['object']['message']
             
-            # Игнорируем системные события и пустые сообщения
             if 'action' in message_obj:
                 return 'ok', 200
             
-            # Игнорируем сообщения с вложениями без текста
             if not message_obj.get('text'):
                 return 'ok', 200
             
@@ -297,58 +309,67 @@ def callback_handler():
             message_text = message_obj.get('text', '')
             conv_msg_id = message_obj.get('conversation_message_id')
             
-            # Игнорируем сообщения от бота
             if user_id == -VK_GROUP_ID:
                 return 'ok', 200
             
-            # Проверка реплая на бота
+            # Проверка реплая
             is_reply_to_bot = False
             
-            # Проверка через reply_message
             if 'reply_message' in message_obj:
                 reply_msg = message_obj['reply_message']
                 if reply_msg and reply_msg.get('from_id') == -VK_GROUP_ID:
                     is_reply_to_bot = True
-                    logger.info("🔁 Это реплай на сообщение бота")
             
-            # Проверка через fwd_messages
             if not is_reply_to_bot and 'fwd_messages' in message_obj:
                 for fwd in message_obj['fwd_messages']:
                     if fwd.get('from_id') == -VK_GROUP_ID:
                         is_reply_to_bot = True
-                        logger.info("🔁 Это реплай на сообщение бота (через fwd)")
                         break
             
-            # Обработка
-            handle_message(
-                user_id=user_id,
-                message_text=message_text,
-                peer_id=peer_id,
-                conv_msg_id=conv_msg_id,
-                is_reply_to_bot=is_reply_to_bot
-            )
+            # Запускаем обработку в отдельном потоке, чтобы не блокировать ответ
+            threading.Thread(
+                target=handle_message,
+                args=(user_id, message_text, peer_id, conv_msg_id, is_reply_to_bot),
+                daemon=True
+            ).start()
             
             return 'ok', 200
         
         return 'ok', 200
     
     except Exception as e:
-        logger.error(f"❌ Ошибка: {e}")
+        logger.error(f"Ошибка: {e}")
         return 'error', 500
 
 
-@app.route('/test', methods=['GET'])
-def test():
-    return jsonify({"status": "ok"})
+@app.route('/ping', methods=['GET'])
+def ping():
+    """Эндпоинт для автопинга"""
+    return 'pong', 200
+
+
+@app.route('/status', methods=['GET'])
+def status():
+    """Статус бота"""
+    return jsonify({
+        "status": "running",
+        "url": RENDER_URL,
+        "group_id": VK_GROUP_ID
+    })
 
 
 if __name__ == '__main__':
-    logger.info("=" * 60)
-    logger.info("🚀 ЗАПУСК VK БОТА")
-    logger.info("=" * 60)
-    logger.info(f"✅ Сервер на порту: {PORT}")
-    logger.info(f"✅ Пути: / и /seych/ai.php")
-    logger.info(f"✅ Защита от дублирования по event_id")
-    logger.info("=" * 60)
+    print("=" * 50)
+    print("🚀 VK БОТ ЗАПУЩЕН")
+    print("=" * 50)
+    print(f"📍 Сервер: {RENDER_URL}")
+    print(f"🔌 Порт: {PORT}")
+    print(f"👤 Разработчик: [id{ADMIN_VK_ID}|ссылка]")
+    print(f"🔄 Автопинг: активен (каждые 4 минуты)")
+    print(f"✅ Callback URL: {RENDER_URL}/")
+    print(f"✅ Альтернативный: {RENDER_URL}/seych/ai.php")
+    print("=" * 50)
+    print("💬 Бот готов к работе!")
+    print("=" * 50)
     
     app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
