@@ -21,7 +21,7 @@ GROQ_API_KEY = os.getenv('GROQ_API_KEY')
 ADMIN_VK_ID = int(os.getenv('ADMIN_VK_ID', '0'))
 RENDER_URL = os.getenv('RENDER_URL', 'https://seych-ai.onrender.com')
 
-CONFIRMATION_CODE = "b58f1e09"
+CONFIRMATION_CODE = "eb59e42a"
 PORT = int(os.getenv('PORT', 5000))
 
 # Настройка логирования - ТОЛЬКО ОШИБКИ и ВАЖНОЕ
