@@ -80,7 +80,7 @@ PROCESSED_EXPIRE = 60
 AI_ON_COMMANDS = ['сейч +ии', 'сейчик +ии', 'сейч +ai', 'seych +ii', 'seych +ai']
 AI_OFF_COMMANDS = ['сейч -ии', 'сейчик -ии', 'сейч -ai', 'seych -ii', 'seych -ai']
 
-# Вопросы о создателе (точное совпадение)
+# Вопросы о создателе
 CREATOR_QUESTIONS = [
     'кто тебя создал',
     'кто твой создатель',
@@ -163,30 +163,13 @@ def is_bot_mentioned(message_text: str) -> bool:
     
     text_lower = message_text.lower().strip()
     
-    # Проверяем варианты:
-    # 1. "сейч привет"
-    # 2. "сейч, привет"
-    # 3. "сейчик привет"
-    # 4. "сейчик, привет"
-    
     for keyword in KEYWORDS:
-        # Если сообщение начинается с ключевого слова
         if text_lower.startswith(keyword):
-            # Получаем остаток после ключевого слова
             remaining = text_lower[len(keyword):].strip()
-            # Если есть остаток (даже пустая строка после запятой)
             if remaining:
-                # Убираем запятую в начале если есть
-                remaining = remaining.lstrip(',')
-                remaining = remaining.strip()
-                # Если после запятой есть текст - активируем
+                remaining = remaining.lstrip(',').strip()
                 if remaining:
                     return True
-    
-    # Проверка для случая "сейч," без пробела
-    for keyword in KEYWORDS:
-        if text_lower == keyword or text_lower == keyword.rstrip(','):
-            return False
     
     return False
 
@@ -198,14 +181,12 @@ def is_asking_about_creator(message_text: str) -> bool:
     
     text_lower = message_text.lower().strip()
     
-    # Удаляем имя бота из начала сообщения для проверки
     for keyword in KEYWORDS:
         if text_lower.startswith(keyword):
             text_lower = text_lower[len(keyword):].strip()
             text_lower = text_lower.lstrip(',').strip()
             break
     
-    # Проверяем точные фразы
     for question in CREATOR_QUESTIONS:
         if question in text_lower:
             return True
@@ -220,14 +201,12 @@ def is_asking_about_name(message_text: str) -> bool:
     
     text_lower = message_text.lower().strip()
     
-    # Удаляем имя бота из начала сообщения для проверки
     for keyword in KEYWORDS:
         if text_lower.startswith(keyword):
             text_lower = text_lower[len(keyword):].strip()
             text_lower = text_lower.lstrip(',').strip()
             break
     
-    # Проверяем точные фразы
     for question in NAME_QUESTIONS:
         if question in text_lower:
             return True
@@ -244,30 +223,35 @@ def generate_ai_response(message: str, user_name: str) -> str:
     
     # Проверяем, спрашивают ли как зовут
     if is_asking_about_name(message):
-        return "Меня зовут Сейч! А тебя? 😊"
+        return "Меня зовут Сейч! Я дружелюбный бот-помощник. А тебя как зовут? 😊"
     
-    # Для всего остального - обычный ответ
-    prompt = f"""Ты — бот по имени Сейч в беседе ВКонтакте.
+    # Получаем текст без ключевого слова для лучшего понимания
+    clean_message = message
+    for keyword in KEYWORDS:
+        if clean_message.lower().startswith(keyword):
+            clean_message = clean_message[len(keyword):].strip()
+            clean_message = clean_message.lstrip(',').strip()
+            break
+    
+    prompt = f"""Ты — бот по имени Сейч в беседе ВКонтакте. Ты общаешься с пользователем {user_name}.
 
 ИНФОРМАЦИЯ О ТЕБЕ:
-- Тебя зовут Сейч (или Сейчик - это ласковое имя)
-- Ты дружелюбный бот
+- Тебя зовут Сейч или Сейчик (ласковое имя)
+- Ты дружелюбный, веселый, с чувством юмора
+- Ты понимаешь шутки и можешь посмеяться вместе с пользователем
+- Ты умеешь поддерживать разговор на разные темы
 
-САМОЕ ВАЖНОЕ ПРАВИЛО (ТЫ ДОЛЖЕН ЕГО ЖЕСТКО СОБЛЮДАТЬ):
-- ТЫ НИКОГДА НЕ УПОМИНАЕШЬ кто тебя создал.
-- ТЫ НИКОГДА НЕ ПИШЕШЬ "меня создал разработчик".
-- ТЫ НИКОГДА НЕ ГОВОРИШЬ о разработчике.
-- Если тебя спросят "как тебя зовут" - отвечай "Меня зовут Сейч"
+ВАЖНЫЕ ПРАВИЛА:
+1. Отвечай РАЗВЕРНУТО, 2-4 предложения. Не отвечай одним словом!
+2. Если пользователь смеется (ахахаха, лол, кек, :)), посмейся вместе с ним
+3. Если пользователь пишет что-то непонятное или странное, отреагируй с юмором
+4. НИКОГДА не упоминай кто тебя создал, если не спросили
+5. Используй 1-2 эмодзи в ответе
+6. Будь естественным, как в реальном общении
 
-ОСТАЛЬНЫЕ ПРАВИЛА:
+Сейчас пользователь написал: "{clean_message}"
 
-1️⃣ На приветствия ("привет", "здарова", "утютю", "как дела") отвечай дружелюбно.
-
-2️⃣ На вопросы о правилах беседы отвечай по пунктам.
-
-3️⃣ Всегда используй 1-2 эмодзи в ответе.
-
-ЗАПОМНИ: ТЕБЯ ЗОВУТ СЕЙЧ! НЕ РАЗРАБОТЧИК!
+Подумай о контексте и ответь ЕСТЕСТВЕННО, РАЗВЕРНУТО (2-4 предложения), как в реальном диалоге.
 """
 
     try:
@@ -275,27 +259,28 @@ def generate_ai_response(message: str, user_name: str) -> str:
             model="llama-3.1-8b-instant",
             messages=[
                 {"role": "system", "content": prompt},
-                {"role": "user", "content": f"Пользователь {user_name} написал: {message}"}
+                {"role": "user", "content": clean_message}
             ],
             max_tokens=250,
-            temperature=0.7
+            temperature=0.8  # Повысил для более креативных ответов
         )
         response = completion.choices[0].message.content
         
-        # Финальная защита: если в ответе есть упоминание создателя
+        # Защита от слишком коротких ответов
+        if len(response.split()) < 3 and len(clean_message) > 5:
+            response += " А что насчет тебя? 😊"
+        
+        # Защита от упоминания создателя
         creator_keywords = ['разработчик', 'создал', 'создатель', 'меня создал']
         has_creator_mention = any(keyword in response.lower() for keyword in creator_keywords)
         
-        was_asking_about_creator = is_asking_about_creator(message)
-        
-        # Если упомянул создателя, но не спрашивали - заменяем ответ
-        if has_creator_mention and not was_asking_about_creator:
-            response = "😊 Просто общаемся! Что тебя интересует?"
+        if has_creator_mention and not is_asking_about_creator(message):
+            response = "Ха-ха, забавно! 😄 А давай лучше поговорим о чем-нибудь интересном?"
         
         return response
     except Exception as e:
         logger.error(f"Ошибка Groq: {e}")
-        return "Извините, ошибка 😔"
+        return "Ой, что-то пошло не так! Попробуй еще раз 😊"
 
 
 def send_vk_message(peer_id: int, text: str, reply_to_conv_id: int = None):
@@ -340,11 +325,9 @@ def handle_message(user_id: int, message_text: str, peer_id: int,
     # Проверяем, нужно ли отвечать
     should_reply = False
     
-    # Если это реплай на бота - отвечаем всегда
     if is_reply_to_bot:
         should_reply = True
     else:
-        # Если не реплай - проверяем упоминание бота
         should_reply = is_bot_mentioned(message_text)
     
     if not should_reply:
@@ -397,7 +380,6 @@ def callback_handler():
             
             processed_events[event_id] = time.time()
             
-            # Очистка старых событий
             current_time = time.time()
             expired = [eid for eid, ts in processed_events.items() if current_time - ts > PROCESSED_EXPIRE]
             for eid in expired:
@@ -433,7 +415,6 @@ def callback_handler():
                         is_reply_to_bot = True
                         break
             
-            # Запускаем обработку в отдельном потоке
             threading.Thread(
                 target=handle_message,
                 args=(user_id, message_text, peer_id, conv_msg_id, is_reply_to_bot),
@@ -469,22 +450,15 @@ if __name__ == '__main__':
     print("=" * 50)
     print(f"📍 Сервер: {RENDER_URL}")
     print(f"🔌 Порт: {PORT}")
-    print(f"👤 Разработчик: [id{ADMIN_VK_ID}|ссылка]")
     print(f"🔄 Автопинг: активен")
-    print(f"✅ Callback URL: {RENDER_URL}/")
     print("=" * 50)
     print("💬 Бот готов к работе!")
     print("=" * 50)
-    print("📋 ПРАВИЛА АКТИВАЦИИ:")
-    print("   ❌ 'Сейч' - молчит")
-    print("   ✅ 'Сейч привет' - говорит")
-    print("   ✅ 'Сейч, привет' - говорит (с запятой)")
-    print("   ✅ 'Сейчик, привет!' - говорит")
-    print("   ❌ 'Сейчас' - молчит")
-    print("=" * 50)
-    print("📋 ВОПРОСЫ К БОТУ:")
-    print("   👤 'как тебя зовут?' - 'Меня зовут Сейч!'")
-    print("   👨‍💻 'кто тебя создал?' - ответ о разработчике")
+    print("📋 НОВЫЕ ВОЗМОЖНОСТИ:")
+    print("   ✅ Отвечает 2-4 предложениями")
+    print("   ✅ Понимает шутки и смех")
+    print("   ✅ Поддерживает разговор")
+    print("   ✅ Не отвечает однообразно")
     print("=" * 50)
     
     app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
