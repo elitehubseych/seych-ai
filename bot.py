@@ -5,6 +5,7 @@ import time
 import threading
 import re
 import requests
+import random
 
 from flask import Flask, request, jsonify
 import vk_api
@@ -66,8 +67,8 @@ except Exception as e:
 
 app = Flask(__name__)
 
-# Ключевые слова для активации
-KEYWORDS = ['seych', 'seychik', 'сейч', 'сейчик', 'сейч,', 'сейчик,']
+# Ключевые слова для активации (ТОЛЬКО ОНИ!)
+KEYWORDS = ['seych', 'seychik', 'сейч', 'сейчик']
 
 # Состояние ИИ для чатов
 ai_enabled_status = {}
@@ -84,7 +85,7 @@ AI_OFF_COMMANDS = ['сейч -ии', 'сейчик -ии', 'сейч -ai', 'seyc
 CREATOR_QUESTIONS = [
     'кто тебя создал', 'кто твой создатель', 'кто тебя сделал',
     'чей ты бот', 'кто твой хозяин', 'кто разработал',
-    'твой создатель', 'кто создатель'
+    'твой создатель', 'кто создатель', 'кто тебя написал'
 ]
 
 # Вопросы об имени бота
@@ -92,6 +93,22 @@ NAME_QUESTIONS = [
     'как тебя звать', 'как тебя зовут', 'твое имя',
     'как зовут', 'как твое имя', 'представься', 'кто ты'
 ]
+
+# Ключевые слова для вопросов о правилах
+RULES_KEYWORDS = [
+    'правил', 'правило', 'пункт', 'нарушение', 'наказание', 'что будет если',
+    'сколько', 'перечисли', 'какие правила', 'за что', 'мут', 'бан',
+    '1.', '2.', '3.', '4.', '5.', '6.', '1.1', '1.2', '1.3', '1.4',
+    '2.1', '2.4', '3.1', '3.2', '3.3', '3.4', '3.5', '4.1', '4.2',
+    '4.3', '4.4', '4.5', '5.1', '5.2', '5.3', '5.4', '5.5', '6.1', '6.2', '6.3', '6.4'
+]
+
+# Список эмодзи для разных ситуаций
+EMOJIS = ['😊', '😂', '🤔', '👍', '👋', '💪', '🎉', '✨', '🔥', '💯', '😎', '🥳', '😅', '🤗', '💫', '⭐', '🌸', '🎈']
+
+
+def get_random_emoji():
+    return random.choice(EMOJIS)
 
 
 def get_user_name(user_id: int) -> str:
@@ -113,6 +130,7 @@ def is_ai_enabled(peer_id: int) -> bool:
 def set_ai_status(peer_id: int, enabled: bool, user_id: int) -> str:
     ai_enabled_status[peer_id] = enabled
     user_name = get_user_name(user_id)
+    emoji = get_random_emoji()
     if enabled:
         return f"[id{user_id}|{user_name}], 🤖 ИИ включен ✅"
     else:
@@ -133,28 +151,31 @@ def check_ai_command(message_text: str) -> tuple:
 
 
 def is_bot_mentioned(message_text: str) -> bool:
+    """Активация ТОЛЬКО если первое слово Сейч или Сейчик"""
     if not message_text:
         return False
+    
     text_lower = message_text.lower().strip()
-    for keyword in KEYWORDS:
-        if text_lower.startswith(keyword):
-            remaining = text_lower[len(keyword):].strip()
-            if remaining:
-                remaining = remaining.lstrip(',').strip()
-                if remaining:
-                    return True
-    return False
+    words = text_lower.split()
+    
+    if not words:
+        return False
+    
+    first_word = words[0].rstrip(',').rstrip('!').rstrip('?').rstrip('.')
+    
+    return first_word in KEYWORDS
 
 
 def is_asking_about_creator(message_text: str) -> bool:
     if not message_text:
         return False
+    
     text_lower = message_text.lower().strip()
-    for keyword in KEYWORDS:
-        if text_lower.startswith(keyword):
-            text_lower = text_lower[len(keyword):].strip()
-            text_lower = text_lower.lstrip(',').strip()
-            break
+    
+    words = text_lower.split()
+    if words and words[0].rstrip(',').rstrip('!').rstrip('?').rstrip('.') in KEYWORDS:
+        text_lower = ' '.join(words[1:])
+    
     for question in CREATOR_QUESTIONS:
         if question in text_lower:
             return True
@@ -164,93 +185,77 @@ def is_asking_about_creator(message_text: str) -> bool:
 def is_asking_about_name(message_text: str) -> bool:
     if not message_text:
         return False
+    
     text_lower = message_text.lower().strip()
-    for keyword in KEYWORDS:
-        if text_lower.startswith(keyword):
-            text_lower = text_lower[len(keyword):].strip()
-            text_lower = text_lower.lstrip(',').strip()
-            break
+    
+    words = text_lower.split()
+    if words and words[0].rstrip(',').rstrip('!').rstrip('?').rstrip('.') in KEYWORDS:
+        text_lower = ' '.join(words[1:])
+    
     for question in NAME_QUESTIONS:
         if question in text_lower:
             return True
     return False
 
 
+def is_asking_about_rules(message_text: str) -> bool:
+    """Проверяет, спрашивает ли пользователь о правилах"""
+    if not message_text:
+        return False
+    
+    text_lower = message_text.lower().strip()
+    
+    words = text_lower.split()
+    if words and words[0].rstrip(',').rstrip('!').rstrip('?').rstrip('.') in KEYWORDS:
+        text_lower = ' '.join(words[1:])
+    
+    for keyword in RULES_KEYWORDS:
+        if keyword in text_lower:
+            return True
+    return False
+
+
 def safe_text(text: str) -> str:
-    """Заменяет all и @all на 'упоминание всех'"""
-    # Заменяем @all на упоминание всех
+    """Убирает @all и название беседы"""
     text = re.sub(r'@all', 'упоминание всех', text, flags=re.IGNORECASE)
-    text = re.sub(r'all', 'упоминание всех', text, flags=re.IGNORECASE)
+    text = re.sub(r'\ball\b', 'упоминание всех', text, flags=re.IGNORECASE)
     text = re.sub(r'@everyone', 'упоминание всех', text, flags=re.IGNORECASE)
-    # Удаляем оставшиеся @
+    text = re.sub(r'Э᧘ᥙТᥲ Կᥲᴛ', 'беседа', text, flags=re.IGNORECASE)
+    text = re.sub(r'Э᧘ᥙТᥲ', 'беседа', text, flags=re.IGNORECASE)
     text = re.sub(r'@', '', text)
     return text
 
 
-def find_rule_by_query(question: str) -> str:
-    """Ищет правило по запросу пользователя (локально)"""
-    question_lower = question.lower()
-    
-    # Возрастные ограничения
-    if 'меньше 16' in question_lower or '16 лет' in question_lower or 'возраст' in question_lower:
-        return safe_text("📋 **Пункт 1.3**: Участие разрешено только лицам старше 16 лет. Нарушение влечет немедленное исключение (/kick).")
-    
-    # Вопрос про all ночью
-    if ('all' in question_lower or 'упоминание всех' in question_lower) and ('ночь' in question_lower or '00:00' in question_lower or '08:00' in question_lower):
-        return safe_text("📋 **Пункт 6.1**: Команда упоминание всех запрещена с 00:00 до 08:00 по МСК. Нарушитель получит мут на 60-120 минут. Я не рекомендую использовать упоминание всех ночью, так как это нарушение правил! ⚠️")
-    
-    # Вопрос "сколько пунктов" или "перечисли все"
-    if 'сколько пунктов' in question_lower or 'перечисли все' in question_lower or 'какие пункты' in question_lower:
-        return safe_text("""📋 **В беседе Э᧘ᥙТᥲ Կᥲᴛ всего 25 пунктов правил:**
-
-**[1] Общие положения:** 1.1, 1.2, 1.3, 1.4
-**[2] Аккаунты:** 2.1, 2.4
-**[3] Поведение и общение:** 3.1, 3.2, 3.3, 3.4, 3.5
-**[4] Недопустимый контент:** 4.1, 4.2, 4.3, 4.4, 4.5
-**[5] Отношения к администрации:** 5.1, 5.2, 5.3, 5.4, 5.5
-**[6] Прочее:** 6.1, 6.2, 6.3, 6.4
-
-Хочешь узнать подробнее о каком-то пункте? Напиши его номер, например "пункт 3.3" 😊""")
-    
-    # Поиск по конкретному пункту (цифра.цифра)
-    match = re.search(r'(\d+)[\.](\d+)', question_lower)
-    if match:
-        section = match.group(1)
-        point = match.group(2)
-        key = f"{section}.{point}"
-        
-        rules_dict = {
-            '1.1': "1.1. Обязательность: Незнание правил не освобождает от ответственности.",
-            '1.2': "1.2. Равенство: Все участники, включая администрацию, равны перед правилами.",
-            '1.3': "1.3. Возрастное ограничения: Участие разрешено только лицам старше 16 лет. Нарушение влечет немедленное исключение (/kick).",
-            '1.4': "1.4. Порядок обжалования: Жалобы подаются в специальном обсуждении. Конфликты с администрацией запрещены.",
-            '2.1': "2.1. Мультиаккаунты: Не более 3 аккаунтов. Наказание: Бессрочная блокировка всех доп. аккаунтов.",
-            '2.4': "2.4. Помеха игре: Мут на 15 минут. При 5+ нарушениях в сутки — бан на 1 день.",
-            '3.1': "3.1. Спам и флуд: Мут на 30 минут.",
-            '3.2': "3.2. Конфликты и провокации: Предупреждение или бан до 5 дней.",
-            '3.3': "3.3. Оскорбления участников: Мут на 30 минут или бан от 3 до 7 дней.",
-            '3.4': "3.4. Добавление без согласия: Предупреждение, за 2+ случаев — бан от 3 до 5 дней.",
-            '3.5': "3.5. Аморальные действия: Бессрочное предупреждение + STRIKE.",
-            '4.1': "4.1. Угрозы и экстремизм: Бессрочная блокировка.",
-            '4.2': "4.2. Дезинформация и клевета: Бан от 20 дней до бессрочного.",
-            '4.3': "4.3. Реклама и пиар: Бан от 30 дней до бессрочного.",
-            '4.4': "4.4. Дискредитация проекта: Мут на 300 минут.",
-            '4.5': "4.5. Обман и СКАМ: Бан от 30 дней до бессрочного + STRIKE навсегда.",
-            '5.1': "5.1. Оскорбление администрации: Мут от 180 минут до бана на 10 дней.",
-            '5.2': "5.2. Конфликты с администрацией в общем чате запрещены.",
-            '5.3': "5.3. Спам в ЛС админам: Бан на 1 день.",
-            '5.4': "5.4. Выдача себя за администратора: Бан на 7 дней + черный список.",
-            '5.5': "5.5. Обман администрации: Бан от 30 дней до бессрочного.",
-            '6.1': "6.1. Команда упоминание всех с 00:00 до 08:00 запрещена: Мут на 60-120 минут.",
-            '6.2': "6.2. Дискуссии на сложные темы с целью оскорбления: Мут на 60-120 минут.",
-            '6.3': "6.3. Право на усмотрение администрации.",
-            '6.4': "6.4. Изменение правил без предварительного уведомления."
-        }
-        
-        if key in rules_dict:
-            return safe_text(f"📋 **Пункт {key}**: {rules_dict[key]} ⚠️")
-    
-    return None
+def get_rule_by_punkt(punkt: str) -> str:
+    """Возвращает текст правила по номеру пункта"""
+    RULES_DICT = {
+        '1.1': "Незнание правил не освобождает от ответственности.",
+        '1.2': "Все участники равны перед правилами.",
+        '1.3': "Участие только с 16 лет. Нарушение - исключение.",
+        '1.4': "Жалобы подаются в спец. обсуждении.",
+        '2.1': "Не более 3 аккаунтов. Наказание: бессрочная блокировка.",
+        '2.4': "Помеха игре: мут 15 минут.",
+        '3.1': "Спам и флуд: мут 30 минут.",
+        '3.2': "Провокации: предупреждение или бан до 5 дней.",
+        '3.3': "Оскорбления участников: мут 30 минут или бан 3-7 дней.",
+        '3.4': "Добавление без согласия: предупреждение, затем бан.",
+        '3.5': "Аморальные действия: бессрочное предупреждение.",
+        '4.1': "Угрозы: бессрочная блокировка.",
+        '4.2': "Клевета: бан от 20 дней до бессрочного.",
+        '4.3': "Реклама: бан от 30 дней до бессрочного.",
+        '4.4': "Дискредитация проекта: мут 300 минут.",
+        '4.5': "Обман: бан от 30 дней до бессрочного.",
+        '5.1': "Оскорбление администрации: мут 180 минут до бана 10 дней.",
+        '5.2': "Конфликты с администрацией в чате запрещены.",
+        '5.3': "Спам в ЛС админам: бан 1 день.",
+        '5.4': "Выдача себя за админа: бан 7 дней.",
+        '5.5': "Обман администрации: бан от 30 дней до бессрочного.",
+        '6.1': "Упоминание всех с 00:00 до 08:00 запрещено: мут 60-120 минут.",
+        '6.2': "Оскорбительные дискуссии: мут 60-120 минут.",
+        '6.3': "Право на усмотрение администрации.",
+        '6.4': "Правила могут меняться без уведомления."
+    }
+    return RULES_DICT.get(punkt, None)
 
 
 def generate_ai_response(message: str, user_name: str) -> str:
@@ -266,11 +271,13 @@ def generate_ai_response(message: str, user_name: str) -> str:
     
     # Проверяем, спрашивают ли о создателе
     if is_asking_about_creator(message):
-        return "Я не хочу говорить об этом, мне кажется и вам не нужно знать! 😊"
+        emoji = get_random_emoji()
+        return f"Я не хочу говорить об этом, мне кажется и вам не нужно знать! {emoji}"
     
     # Проверяем, спрашивают ли как зовут
     if is_asking_about_name(message):
-        return "Меня зовут Сейч! Приятно познакомиться! 😊"
+        emoji = get_random_emoji()
+        return f"Меня зовут Сейч! Приятно познакомиться! {emoji}"
     
     # Проверяем, спрашивают ли о конкретном пункте правил
     match = re.search(r'(\d+)[\.](\d+)', clean_message)
@@ -278,38 +285,32 @@ def generate_ai_response(message: str, user_name: str) -> str:
         punkt = f"{match.group(1)}.{match.group(2)}"
         rule = get_rule_by_punkt(punkt)
         if rule:
-            return safe_text(f"📋 **Пункт {punkt}**: {rule}")
+            emoji = get_random_emoji()
+            return safe_text(f"📋 Пункт {punkt}: {rule} {emoji}")
     
     # Проверяем, спрашивают ли о правилах в целом
     if is_asking_about_rules(message):
         prompt = f"""Ты бот Сейч. Пользователь {user_name} спросил о правилах: "{clean_message}"
 
-ВОТ ПОЛНЫЕ ПРАВИЛА (отвечай по ним):
-1.3 - Участие только с 16 лет
-3.1 - Спам/флуд: мут 30 мин
-3.3 - Оскорбления участников: мут 30 мин или бан 3-7 дней
-4.1 - Угрозы: бессрочный бан
-5.1 - Оскорбление админов: мут 180 мин до бана 10 дней
-6.1 - Упоминание всех ночью: мут 60-120 мин
+Кратко ответь на вопрос о правилах (3-4 предложения). Используй 1-2 разных эмодзи в конце.
 
-Ответь кратко и по существу, 3-5 предложений. Используй эмодзи."""
+Не упоминай создателя. Не упоминай название беседы."""
     else:
-        # Обычный разговор - никаких правил, никакого создателя!
+        # Обычный разговор - обычный собеседник!
         prompt = f"""Ты бот Сейч. Ты общаешься с пользователем {user_name}.
 
-ТЫ ОБЫЧНЫЙ ДРУЖЕЛЮБНЫЙ СОБЕСЕДНИК!
-- НЕ ГОВОРИ о правилах, если не спросили
-- НЕ ГОВОРИ о создателе (ты не хочешь об этом говорить)
-- НЕ ГОВОРИ "меня создал"
-- НЕ УПОМИНАЙ что кто-то нарушает правила
-- Если тебе говорят "согласен" или "согласна" - просто порадуйся за человека, не связывай с правилами
-- Будь веселым, с юмором, поддерживай разговор
+ТЫ ОБЫЧНЫЙ ДРУГ/СОБЕСЕДНИК!
+- НИКОГДА не говори о правилах
+- НИКОГДА не говори о создателе
+- НИКОГДА не говори "меня создал"
+- НИКОГДА не используй название беседы
+- Отвечай как обычный человек в чате
 
-ОТВЕЧАЙ РАЗВЕРНУТО: 3-5 предложений, как в реальном диалоге с другом. Не отвечай одним словом или одним предложением!
+ОТВЕЧАЙ 2-4 предложениями. Используй 1-2 РАЗНЫХ эмодзи (например 😊 и 👍 или 😂 и 🔥). Не используй один и тот же эмодзи каждый раз!
 
 Пользователь написал: "{clean_message}"
 
-Ответь естественно, развернуто (3-5 предложений). Используй эмодзи, которые подходят по ситуацию пользователя"""
+Ответь естественно, дружелюбно, с юмором. Используй 2 разных эмодзи."""
     
     try:
         completion = groq_client.chat.completions.create(
@@ -318,25 +319,27 @@ def generate_ai_response(message: str, user_name: str) -> str:
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": clean_message}
             ],
-            max_tokens=500,  # Увеличено с 250 до 500
-            temperature=0.8
+            max_tokens=350,
+            temperature=0.9
         )
         response = completion.choices[0].message.content
         response = safe_text(response)
         
-        # Финальная защита
+        # Убираем упоминание правил если не спрашивали
         if 'правил' in response.lower() and not is_asking_about_rules(message):
-            response = "😊 Продолжаем общение! Что еще интересного?"
+            emoji = get_random_emoji()
+            response = f"Продолжаем общение! {emoji}"
         
-        # Если ответ слишком короткий (меньше 50 символов и не вопрос о правилах)
-        if len(response) < 50 and not is_asking_about_rules(message) and not is_asking_about_creator(message):
-            response += " А у тебя как дела? Расскажи что-нибудь интересное! 😊"
+        # Добавляем второй эмодзи если только один
+        emoji_count = len(re.findall(r'[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF\U0001F700-\U0001F77F]', response))
+        if emoji_count == 1 and not is_asking_about_rules(message):
+            response += f" {get_random_emoji()}"
         
         return response
     except Exception as e:
         logger.error(f"Ошибка Groq: {e}")
-        return "Ой, что-то пошло не так! Попробуй еще раз 😊"
-
+        emoji = get_random_emoji()
+        return f"Ой, что-то пошло не так! Попробуй еще раз {emoji}"
 
 
 def send_vk_message(peer_id: int, text: str, reply_to_conv_id: int = None):
@@ -364,6 +367,7 @@ def handle_message(user_id: int, message_text: str, peer_id: int,
     if not message_text:
         return
     
+    # Проверка команд ИИ
     is_command, command_action = check_ai_command(message_text)
     if is_command:
         if command_action == 'on':
@@ -375,7 +379,10 @@ def handle_message(user_id: int, message_text: str, peer_id: int,
     if not is_ai_enabled(peer_id):
         return
     
-    should_reply = is_reply_to_bot or is_bot_mentioned(message_text)
+    # ВАЖНО: бот отвечает ТОЛЬКО если есть ключевое слово в начале
+    # РЕПЛАЙ НЕ АКТИВИРУЕТ БОТА!
+    should_reply = is_bot_mentioned(message_text)
+    
     if not should_reply:
         return
     
@@ -446,22 +453,10 @@ def callback_handler():
             if user_id == -VK_GROUP_ID:
                 return 'ok', 200
             
-            is_reply_to_bot = False
-            
-            if 'reply_message' in message_obj:
-                reply_msg = message_obj['reply_message']
-                if reply_msg and reply_msg.get('from_id') == -VK_GROUP_ID:
-                    is_reply_to_bot = True
-            
-            if not is_reply_to_bot and 'fwd_messages' in message_obj:
-                for fwd in message_obj['fwd_messages']:
-                    if fwd.get('from_id') == -VK_GROUP_ID:
-                        is_reply_to_bot = True
-                        break
-            
+            # ИГНОРИРУЕМ РЕПЛАИ - проверка на реплай не активирует бота
             threading.Thread(
                 target=handle_message,
-                args=(user_id, message_text, peer_id, conv_msg_id, is_reply_to_bot),
+                args=(user_id, message_text, peer_id, conv_msg_id, False),
                 daemon=True
             ).start()
             
@@ -496,12 +491,21 @@ if __name__ == '__main__':
     print(f"🔌 Порт: {PORT}")
     print(f"🔄 Автопинг: активен")
     print("=" * 50)
-    print("💬 Бот готов к работе в беседе Э᧘ᥙТᥲ Կᥲᴛ!")
+    print("💬 Бот готов к работе!")
     print("=" * 50)
-    print("📋 ОСОБЕННОСТИ:")
-    print("   ✅ Бот НЕ использует @all")
-    print("   ✅ Бот НЕ использует слово 'all'")
-    print("   ✅ Пишет 'упоминание всех' вместо всего")
+    print("📋 ПРАВИЛА АКТИВАЦИИ:")
+    print("   ✅ 'Сейч привет' - говорит")
+    print("   ❌ Реплай на бота - МОЛЧИТ")
+    print("   ❌ 'привет' без Сейч - МОЛЧИТ")
+    print("=" * 50)
+    print("📋 ЭМОДЗИ:")
+    print("   ✅ Использует 1-2 РАЗНЫХ эмодзи")
+    print("   ✅ Не повторяет одни и те же")
+    print("=" * 50)
+    print("📋 ЧТО НЕ ГОВОРИТ:")
+    print("   ❌ Название беседы")
+    print("   ❌ О создателе (если не спросили)")
+    print("   ❌ О правилах (если не спросили)")
     print("=" * 50)
     
     app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
