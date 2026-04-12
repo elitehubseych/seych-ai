@@ -70,7 +70,7 @@ RULES_FULL = {
     '4.1': "4.1. Угрозы: Бессрочная блокировка.",
     '4.3': "4.3. Реклама: Бан от 30 дней.",
     '5.1': "5.1. Оскорбление администрации: Мут от 180 минут до бана 10 дней.",
-    '6.1': "6.1. @all ночью: Мут 60-120 минут."
+    '6.1': "6.1. all ночью: Мут 60-120 минут."
 }
 
 PUNISHMENTS = {
@@ -106,13 +106,10 @@ def is_bot_mentioned(text):
     return words and words[0].rstrip(',').rstrip('!').rstrip('?') in KEYWORDS
 
 def extract_user_id(text):
-    # [id123|name]
     m = re.search(r'\[id(\d+)\|', text)
     if m: return int(m.group(1))
-    # id123
     m = re.search(r'id(\d+)', text)
     if m: return int(m.group(1))
-    # @username
     m = re.search(r'@([a-zA-Z0-9_]+)', text)
     if m:
         try:
@@ -120,15 +117,12 @@ def extract_user_id(text):
             if r and r.get('type') == 'user':
                 return r.get('object_id')
         except: pass
-    # просто число
     m = re.search(r'\b(\d{5,10})\b', text)
     if m: return int(m.group(1))
     return None
 
-def send_punishment(user_id, punkt, issuer_id):
-    global USER_VK
-    
-    if USER_VK is None:
+def send_punishment(user_id, punkt, issuer_id, user_vk_obj):
+    if user_vk_obj is None:
         return "❌ Токен пользователя не настроен"
     
     if issuer_id != ADMIN_VK_ID:
@@ -142,17 +136,17 @@ def send_punishment(user_id, punkt, issuer_id):
     
     try:
         if ptype == 'mute':
-            USER_VK.messages.send(peer_id=PUNISHMENT_CHAT_ID, message=f"mute @{user_id} {duration}\n{rule_text}", random_id=get_random_id())
+            user_vk_obj.messages.send(peer_id=PUNISHMENT_CHAT_ID, message=f"mute @{user_id} {duration}\n{rule_text}", random_id=get_random_id())
         elif ptype == 'ban':
-            USER_VK.messages.send(peer_id=PUNISHMENT_CHAT_ID, message=f"ban @{user_id} {duration}\n{rule_text}", random_id=get_random_id())
+            user_vk_obj.messages.send(peer_id=PUNISHMENT_CHAT_ID, message=f"ban @{user_id} {duration}\n{rule_text}", random_id=get_random_id())
         elif ptype == 'permban':
-            USER_VK.messages.send(peer_id=PUNISHMENT_CHAT_ID, message=f"permban @{user_id}\n{rule_text}", random_id=get_random_id())
+            user_vk_obj.messages.send(peer_id=PUNISHMENT_CHAT_ID, message=f"permban @{user_id}\n{rule_text}", random_id=get_random_id())
         elif ptype == 'kick':
-            USER_VK.messages.send(peer_id=PUNISHMENT_CHAT_ID, message=f"kick @{user_id}\n{rule_text}", random_id=get_random_id())
+            user_vk_obj.messages.send(peer_id=PUNISHMENT_CHAT_ID, message=f"kick @{user_id}\n{rule_text}", random_id=get_random_id())
         elif ptype == 'immoral':
-            USER_VK.messages.send(peer_id=PUNISHMENT_CHAT_ID, message=f"warn @{user_id} 999 лет\nАморальные действия", random_id=get_random_id())
+            user_vk_obj.messages.send(peer_id=PUNISHMENT_CHAT_ID, message=f"warn @{user_id} 999 лет\nАморальные действия", random_id=get_random_id())
             time.sleep(0.5)
-            USER_VK.messages.send(peer_id=PUNISHMENT_CHAT_ID, message=f"роль @{user_id} -99", random_id=get_random_id())
+            user_vk_obj.messages.send(peer_id=PUNISHMENT_CHAT_ID, message=f"роль @{user_id} -99", random_id=get_random_id())
         
         return f"⚠️ [id{user_id}|] получил наказание по пункту {punkt}: {rule_text} {get_random_emoji()}"
     except Exception as e:
@@ -183,7 +177,7 @@ def generate_response(message, user_name, user_id):
                     punkt = p
                     break
         if punkt:
-            return send_punishment(uid, punkt, user_id)
+            return send_punishment(uid, punkt, user_id, USER_VK)
     
     # Вопрос о правиле
     m = re.search(r'(\d+\.\d+)', clean)
@@ -212,7 +206,6 @@ def handle_message(user_id, text, peer_id, conv_id):
     if not text:
         return
     
-    is_cmd, action = False, None
     tl = text.lower().strip()
     if tl in ['сейч +ии', 'сейчик +ии', 'сейч +ai']:
         ai_enabled_status[peer_id] = True
@@ -271,7 +264,6 @@ if __name__ == '__main__':
     print(f"🔑 User Token: {'✅ ДОСТУПЕН' if USER_VK else '❌ НЕДОСТУПЕН'}")
     print("=" * 50)
     
-    # Автопинг
     def ping_self():
         while True:
             time.sleep(240)
