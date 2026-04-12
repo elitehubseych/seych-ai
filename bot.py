@@ -61,22 +61,24 @@ except Exception as e:
     logger.error(f"❌ Ошибка VK API: {e}")
     exit(1)
 
-# СОЗДАЕМ ЮЗЕР-ТОКЕН ДЛЯ ОТПРАВКИ
+# Инициализация пользовательского VK API (для наказаний)
 user_api = None
 if USER_TOKEN:
     try:
         user_session = vk_api.VkApi(token=USER_TOKEN)
         user_api = user_session.get_api()
         logger.info("✅ Пользовательский VK API инициализирован")
-        # Тестовое сообщение
-        user_api.messages.send(
-            peer_id=PUNISHMENT_CHAT_ID,
-            message="✅ Бот запущен!",
-            random_id=get_random_id()
-        )
-        logger.info("✅ Тестовое сообщение отправлено")
+        try:
+            user_api.messages.send(
+                peer_id=PUNISHMENT_CHAT_ID,
+                message="✅ Бот запущен, токен работает!",
+                random_id=get_random_id()
+            )
+            logger.info("✅ Тестовое сообщение отправлено в чат наказаний")
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось отправить тестовое сообщение: {e}")
     except Exception as e:
-        logger.error(f"❌ Ошибка: {e}")
+        logger.error(f"❌ Ошибка инициализации: {e}")
         user_api = None
 else:
     logger.warning("⚠️ USER_TOKEN не найден")
@@ -160,7 +162,9 @@ RULES_FULL = {
 
 PUNISHMENT_TYPES = {
     '3.1': {'type': 'mute', 'duration': '30', 'unit': 'минут'},
+    '3.2': {'type': 'warn', 'duration': '10', 'unit': 'дней'},
     '3.3': {'type': 'mute', 'duration': '30', 'unit': 'минут'},
+    '3.4': {'type': 'warn', 'duration': '10', 'unit': 'дней'},
     '3.5': {'type': 'immoral'},
     '4.1': {'type': 'permban'},
     '4.2': {'type': 'ban', 'duration': '20', 'unit': 'дней'},
@@ -168,10 +172,12 @@ PUNISHMENT_TYPES = {
     '4.4': {'type': 'mute', 'duration': '300', 'unit': 'минут'},
     '4.5': {'type': 'ban', 'duration': '30', 'unit': 'дней'},
     '5.1': {'type': 'mute', 'duration': '180', 'unit': 'минут'},
+    '5.2': {'type': 'warn', 'duration': '10', 'unit': 'дней'},
     '5.3': {'type': 'ban', 'duration': '1', 'unit': 'день'},
     '5.4': {'type': 'ban', 'duration': '7', 'unit': 'дней'},
     '5.5': {'type': 'ban', 'duration': '30', 'unit': 'дней'},
     '6.1': {'type': 'mute', 'duration': '60', 'unit': 'минут'},
+    '6.2': {'type': 'mute', 'duration': '60', 'unit': 'минут'},
     '1.3': {'type': 'kick'},
     '2.1': {'type': 'permban'},
     '2.4': {'type': 'mute', 'duration': '15', 'unit': 'минут'}
@@ -179,12 +185,24 @@ PUNISHMENT_TYPES = {
 
 VIOLATIONS = {
     'спам': '3.1', 'флуд': '3.1',
+    'провокация': '3.2', 'конфликт': '3.2',
     'оскорбление участника': '3.3', 'оскорбление участников': '3.3',
+    'добавление без согласия': '3.4',
     'амор': '3.5', 'аморал': '3.5', 'аморальные действия': '3.5',
     'угроза': '4.1', 'угрозы': '4.1',
+    'клевета': '4.2', 'дезинформация': '4.2',
     'реклама': '4.3', 'пиар': '4.3',
+    'дискредитация': '4.4',
+    'обман': '4.5', 'скам': '4.5',
     'оскорбление админа': '5.1', 'оскорбление администрации': '5.1',
-    '16+': '1.3', 'возраст': '1.3'
+    'спам админам': '5.3',
+    'выдача себя за админа': '5.4',
+    'обман администрации': '5.5',
+    'упоминание всех': '6.1', 'all': '6.1',
+    'политика': '6.2',
+    '16+': '1.3', 'возраст': '1.3',
+    'мультиаккаунты': '2.1',
+    'помеха игре': '2.4'
 }
 
 
@@ -308,48 +326,79 @@ def extract_punishment_command(text: str) -> dict:
     return {'user_id': user_id, 'punkt': punkt}
 
 
-def handle_punishment(user_id: int, punkt: str, issuer_id: int) -> str:
-    # ПРЯМАЯ ПРОВЕРКА - БЕЗ ГЛОБАЛЬНЫХ ПЕРЕМЕННЫХ
-    if USER_TOKEN is None or user_api is None:
+def handle_punishment(user_id: int, punkt: str, issuer_id: int, user_api_obj) -> str:
+    if user_api_obj is None:
         return "❌ Функция наказаний недоступна (токен пользователя не настроен)"
     
     if issuer_id != ADMIN_VK_ID:
         return "❌ У вас нет прав для выдачи наказаний"
     
     if punkt not in PUNISHMENT_TYPES:
-        return f"❌ Пункт {punkt} не найден"
+        return f"❌ Пункт {punkt} не найден в правилах"
     
-    p_type = PUNISHMENT_TYPES[punkt]['type']
     rule_text = RULES_FULL.get(punkt, "нарушение правил")
-    
-    commands = []
-    if p_type == 'mute':
-        duration = PUNISHMENT_TYPES[punkt].get('duration', '30')
-        unit = PUNISHMENT_TYPES[punkt].get('unit', 'минут')
-        commands.append(f"mute @{user_id} {duration} {unit}\n{rule_text}")
-    elif p_type == 'ban':
-        duration = PUNISHMENT_TYPES[punkt].get('duration', '30')
-        unit = PUNISHMENT_TYPES[punkt].get('unit', 'дней')
-        commands.append(f"ban @{user_id} {duration} {unit}\n{rule_text}")
-    elif p_type == 'permban':
-        commands.append(f"permban @{user_id}\n{rule_text}")
-    elif p_type == 'kick':
-        commands.append(f"kick @{user_id}\n{rule_text}")
-    elif p_type == 'immoral':
-        commands.append(f"warn @{user_id} 999 лет\nАморальные действия")
-        commands.append(f"роль @{user_id} -99")
+    p_type = PUNISHMENT_TYPES[punkt]['type']
     
     try:
-        for cmd in commands:
-            user_api.messages.send(
+        if p_type == 'mute':
+            duration = PUNISHMENT_TYPES[punkt].get('duration', '30')
+            unit = PUNISHMENT_TYPES[punkt].get('unit', 'минут')
+            user_api_obj.messages.send(
                 peer_id=PUNISHMENT_CHAT_ID,
-                message=cmd,
+                message=f"mute @{user_id} {duration} {unit}\n{rule_text}",
                 random_id=get_random_id()
             )
-            time.sleep(0.3)
+        
+        elif p_type == 'ban':
+            duration = PUNISHMENT_TYPES[punkt].get('duration', '30')
+            unit = PUNISHMENT_TYPES[punkt].get('unit', 'дней')
+            user_api_obj.messages.send(
+                peer_id=PUNISHMENT_CHAT_ID,
+                message=f"ban @{user_id} {duration} {unit}\n{rule_text}",
+                random_id=get_random_id()
+            )
+        
+        elif p_type == 'permban':
+            user_api_obj.messages.send(
+                peer_id=PUNISHMENT_CHAT_ID,
+                message=f"permban @{user_id}\n{rule_text}",
+                random_id=get_random_id()
+            )
+        
+        elif p_type == 'kick':
+            user_api_obj.messages.send(
+                peer_id=PUNISHMENT_CHAT_ID,
+                message=f"kick @{user_id}\n{rule_text}",
+                random_id=get_random_id()
+            )
+        
+        elif p_type == 'warn':
+            duration = PUNISHMENT_TYPES[punkt].get('duration', '10')
+            unit = PUNISHMENT_TYPES[punkt].get('unit', 'дней')
+            user_api_obj.messages.send(
+                peer_id=PUNISHMENT_CHAT_ID,
+                message=f"warn @{user_id} {duration} {unit}\n{rule_text}",
+                random_id=get_random_id()
+            )
+        
+        elif p_type == 'immoral':
+            user_api_obj.messages.send(
+                peer_id=PUNISHMENT_CHAT_ID,
+                message=f"warn @{user_id} 999 лет\nАморальные действия",
+                random_id=get_random_id()
+            )
+            time.sleep(0.5)
+            user_api_obj.messages.send(
+                peer_id=PUNISHMENT_CHAT_ID,
+                message=f"роль @{user_id} -99",
+                random_id=get_random_id()
+            )
+        
         return f"⚠️ Пользователь [id{user_id}|] получил наказание по пункту {punkt}: {rule_text} {get_random_emoji()}"
+    
     except Exception as e:
-        return f"❌ Ошибка: {e}"
+        logger.error(f"❌ Ошибка отправки: {e}")
+        return f"❌ Ошибка при выдаче наказания: {e}"
 
 
 def safe_text(text: str) -> str:
@@ -370,7 +419,7 @@ def generate_ai_response(message: str, user_name: str, user_id: int = None) -> s
     # Проверка на команду наказания
     punish_data = extract_punishment_command(clean_message)
     if punish_data and punish_data.get('user_id') and punish_data.get('punkt'):
-        return handle_punishment(punish_data['user_id'], punish_data['punkt'], user_id)
+        return handle_punishment(punish_data['user_id'], punish_data['punkt'], user_id, user_api)
     
     # Проверка на вопрос о создателе
     if is_asking_about_creator(message):
@@ -570,6 +619,11 @@ if __name__ == '__main__':
     print(f"🔑 User Token: {'✅ ДОСТУПЕН' if user_api is not None else '❌ НЕДОСТУПЕН'}")
     print("=" * 50)
     print("💬 Бот готов к работе!")
+    print("=" * 50)
+    print("📋 КОМАНДЫ НАКАЗАНИЙ:")
+    print("   ✅ сейч накажи @username 3.3")
+    print("   ✅ сейч накажи id739673001 3.3")
+    print("   ✅ сейч накажи 739673001 3.3")
     print("=" * 50)
     
     app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
