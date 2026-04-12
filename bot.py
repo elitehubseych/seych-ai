@@ -67,26 +67,31 @@ user_token_available = False
 
 if USER_TOKEN:
     try:
-        # Пробуем создать сессию
+        # Создаем сессию с токеном пользователя
         user_vk_session = vk_api.VkApi(token=USER_TOKEN)
         user_vk = user_vk_session.get_api()
         
         # Пробуем отправить тестовое сообщение в чат наказаний
         try:
-            user_vk.messages.send(
+            test_result = user_vk.messages.send(
                 peer_id=PUNISHMENT_CHAT_ID,
                 message="✅ Бот запущен, токен работает!",
                 random_id=get_random_id()
             )
-            user_token_available = True
-            logger.info("✅ Пользовательский VK API инициализирован (для выдачи наказаний)")
+            if test_result:
+                user_token_available = True
+                logger.info("✅ Пользовательский VK API инициализирован (для выдачи наказаний)")
+            else:
+                logger.error("❌ Не удалось отправить тестовое сообщение")
+                user_vk = None
+                user_token_available = False
         except Exception as e:
             error_msg = str(e)
+            logger.error(f"❌ Ошибка при проверке токена: {error_msg}")
             if 'access_token was given to another ip' in error_msg:
                 logger.error("❌ Токен привязан к другому IP. Получите новый токен с параметром offline")
-                logger.info("💡 Как исправить: https://vkhost.github.io выберите 'Kate Mobile' или 'VK Admin', поставьте галочку 'offline'")
-            else:
-                logger.error(f"❌ Ошибка при проверке токена: {e}")
+            elif 'access_denied' in error_msg.lower():
+                logger.error("❌ Не хватает прав у токена. Нужны права: messages, groups")
             user_vk = None
             user_token_available = False
     except Exception as e:
@@ -296,6 +301,9 @@ def extract_user_id_from_mention(text: str) -> int:
     match = re.search(r'id(\d+)', text)
     if match:
         return int(match.group(1))
+    match = re.search(r'@([a-zA-Z0-9_]+)', text)
+    if match:
+        return None
     return None
 
 
@@ -310,8 +318,8 @@ def extract_punishment_command(text: str) -> dict:
     if not user_id:
         return None
     
-    punkt_match = re.search(r'пункт[у]?\s*(\d+[\.]\d+)', text_lower)
-    punkt = punkt_match.group(1) if punkt_match else None
+    punkt_match = re.search(r'(\d+)[\.](\d+)', text_lower)
+    punkt = f"{punkt_match.group(1)}.{punkt_match.group(2)}" if punkt_match else None
     
     violation = None
     for v, p in VIOLATIONS.items():
@@ -330,7 +338,6 @@ def extract_punishment_command(text: str) -> dict:
     reason = None
     after_mention = re.sub(r'\[id\d+\|[^\]]+\]', '', text)
     after_mention = re.sub(r'@\w+', '', after_mention)
-    after_mention = re.sub(r'id\d+', '', after_mention)
     after_mention = after_mention.strip()
     
     if after_mention and len(after_mention) > 3:
