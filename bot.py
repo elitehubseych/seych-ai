@@ -68,7 +68,6 @@ if USER_TOKEN:
     try:
         user_vk = vk_api.VkApi(token=USER_TOKEN).get_api()
         logger.info("✅ Пользовательский VK API инициализирован (для выдачи наказаний)")
-        # Отправляем тестовое сообщение
         try:
             user_vk.messages.send(
                 peer_id=PUNISHMENT_CHAT_ID,
@@ -404,11 +403,9 @@ def send_punishment_commands(user_id: int, punkt: str, reason_text: str) -> list
     return commands
 
 
-def execute_punishment(punish_data: dict, issuer_id: int) -> str:
-    global user_vk
-    
-    # ЖЕСТКАЯ ПРОВЕРКА
-    if user_vk is None:
+def execute_punishment(punish_data: dict, issuer_id: int, user_vk_obj) -> str:
+    # user_vk_obj передаем как аргумент
+    if user_vk_obj is None:
         return "❌ Функция наказаний недоступна (токен пользователя не инициализирован)"
     
     if issuer_id != ADMIN_VK_ID:
@@ -428,7 +425,7 @@ def execute_punishment(punish_data: dict, issuer_id: int) -> str:
     
     try:
         for command in commands:
-            user_vk.messages.send(
+            user_vk_obj.messages.send(
                 peer_id=PUNISHMENT_CHAT_ID,
                 message=command,
                 random_id=get_random_id()
@@ -454,6 +451,8 @@ def safe_text(text: str) -> str:
 
 
 def generate_ai_response(message: str, user_name: str, user_id: int = None) -> str:
+    global user_vk
+    
     clean_message = message
     for keyword in KEYWORDS:
         if clean_message.lower().startswith(keyword):
@@ -461,10 +460,10 @@ def generate_ai_response(message: str, user_name: str, user_id: int = None) -> s
             clean_message = clean_message.lstrip(',').strip()
             break
     
-    # Проверка на команду наказания
+    # Проверка на команду наказания - ПЕРЕДАЕМ user_vk
     punish_data = extract_punishment_command(clean_message)
     if punish_data and punish_data.get('user_id'):
-        result = execute_punishment(punish_data, user_id)
+        result = execute_punishment(punish_data, user_id, user_vk)
         if result:
             return result
     
@@ -676,11 +675,6 @@ if __name__ == '__main__':
     print(f"🔑 User Token: {'✅ ДОСТУПЕН' if user_vk is not None else '❌ НЕДОСТУПЕН'}")
     print("=" * 50)
     print("💬 Бот готов к работе!")
-    print("=" * 50)
-    print("📋 КОМАНДЫ НАКАЗАНИЙ (примеры):")
-    print("   ✅ сейч накажи @username 3.3")
-    print("   ✅ сейч накажи id123456 3.3")
-    print("   ✅ сейч накажи 123456 3.3")
     print("=" * 50)
     
     app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
