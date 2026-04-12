@@ -61,27 +61,25 @@ except Exception as e:
     logger.error(f"❌ Ошибка VK API: {e}")
     exit(1)
 
-# Инициализация пользовательского VK API (для наказаний)
-USER_VK = None  # Глобальная переменная
-
+# СОЗДАЕМ ЮЗЕР-ТОКЕН ДЛЯ ОТПРАВКИ
+user_api = None
 if USER_TOKEN:
     try:
-        USER_VK = vk_api.VkApi(token=USER_TOKEN).get_api()
-        logger.info("✅ Пользовательский VK API инициализирован (для выдачи наказаний)")
-        try:
-            USER_VK.messages.send(
-                peer_id=PUNISHMENT_CHAT_ID,
-                message="✅ Бот запущен, токен работает!",
-                random_id=get_random_id()
-            )
-            logger.info("✅ Тестовое сообщение отправлено в чат наказаний")
-        except Exception as e:
-            logger.warning(f"⚠️ Не удалось отправить тестовое сообщение: {e}")
+        user_session = vk_api.VkApi(token=USER_TOKEN)
+        user_api = user_session.get_api()
+        logger.info("✅ Пользовательский VK API инициализирован")
+        # Тестовое сообщение
+        user_api.messages.send(
+            peer_id=PUNISHMENT_CHAT_ID,
+            message="✅ Бот запущен!",
+            random_id=get_random_id()
+        )
+        logger.info("✅ Тестовое сообщение отправлено")
     except Exception as e:
-        logger.error(f"❌ Ошибка инициализации пользовательского VK API: {e}")
-        USER_VK = None
+        logger.error(f"❌ Ошибка: {e}")
+        user_api = None
 else:
-    logger.warning("⚠️ USER_TOKEN не найден - функция выдачи наказаний будет недоступна")
+    logger.warning("⚠️ USER_TOKEN не найден")
 
 # Инициализация Groq
 try:
@@ -111,7 +109,7 @@ AI_OFF_COMMANDS = ['сейч -ии', 'сейчик -ии', 'сейч -ai', 'seyc
 CREATOR_QUESTIONS = [
     'кто тебя создал', 'кто твой создатель', 'кто тебя сделал',
     'чей ты бот', 'кто твой хозяин', 'кто разработал',
-    'твой создатель', 'кто создатель', 'кто тебя написал'
+    'твой создатель', 'кто создатель'
 ]
 
 # Вопросы об имени бота
@@ -136,90 +134,57 @@ RULES_FULL = {
     '1.1': "1.1. Обязательность: Незнание правил не освобождает от ответственности.",
     '1.2': "1.2. Равенство: Все участники, включая администрацию, равны перед правилами.",
     '1.3': "1.3. Возрастное ограничения: Участие разрешено только лицам старше 16 лет. Нарушение влечет немедленное исключение (/kick).",
-    '1.4': "1.4. Порядок обжалования: Если вы не согласны с наказанием, вы вправе подать апелляцию в специальном отведенном для этого обсуждении. Конфликты с администрацией в общем чате по этому поводу запрещены.",
-    '2.1': "2.1. Мультиаккаунты: Разрешено не более трех аккаунтов на одного пользователя. Запрещен обход наказаний с помощью дополнительных аккаунтов или ботов. Наказание: Бессрочная блокировка (/permban) всех дополнительных аккаунтов и удвоение срока наказания для основного.",
-    '2.4': "2.4. Помеха игровому процессу: Запрещено мешать игре: принудительно завершать, накидывать голосования о завершении без согласия большинства. Наказание: Мут на 15 минут. При 5+ нарушениях в сутки — бан на 1 день.",
-    '3.1': "3.1. Спам и флуд: Запрещены спам (однотипные сообщения) и флуд (цепочка из 7+ сообщений, «лесенка»). Наказание: Мут (/mute) на 30 минут. За многократные нарушения: внесения в отметку (STRIKE).",
-    '3.2': "3.2. Конфликты и провокации: Запрещены бесцельные конфликты, провокации других участников, подстрекательство к нарушению правил. Наказание: Предупреждение (/warn) или бан (/ban) до 5 дней.",
-    '3.3': "3.3. Уважение к участникам: Запрещены оскорбления, унижение чести и достоинства, агрессивное поведение. Наказание: Мут на 30 минут или бан от 3 до 7 дней.",
-    '3.4': "3.4. Запрещено добавлять людей в беседу без их согласия. Наказание: Предупреждение (/warn) за 2+ случаев — бан от 3 до 5 дней.",
-    '3.5': "3.5. Аморальные действия: Запрещены любые действия интимного характера, направленные на других участников без их явного, добровольного и однозначного согласия. Наказание: Бессрочное предупреждения (/warn) + внесение в отметку (STRIKE).",
-    '4.1': "4.1. Угрозы и экстремизм: Строго запрещены: угрозы жизни и здоровью участников, их родных и близких; оскорбление родных и близких; распространение информации, выражающей явное неуважение к государству, его символам или органам власти. Наказание: Бессрочная блокировка (/permban).",
-    '4.2': "4.2. Дезинформация и клевета: Запрещены намеренный обман, клевета, призывы покинуть сообщество на ложной основе, ввод в заблуждение под видом рекламы. Наказание: Бан от 20 дней до бессрочного.",
-    '4.3': "4.3. Реклама и пиар: Запрещена любая несанкционированная реклама, публикация ссылок, пиар других чатов/проектов и переманивание участников. Наказание: Бан от 30 дней до бессрочного.",
-    '4.4': "4.4. Дискредитация проекта: Запрещены оскорбления проекта, его репутации и администрации. Наказание: Мут на 300 минут. При продолжении в ЛС — бан от 30 дней до бессрочного.",
-    '4.5': "4.5. Обман: Запрещен обман и СКАМ участников в любой форме. Наказания: бан от 30 дней (/ban) до бессрочной блокировки (/permban) | Также внесения в отметку (STRIKE) - навсегда.",
-    '5.1': "5.1. Уважение к администрации: Запрещены оскорбления, провокации и клевета в адрес администрации. Наказание: Мут от 180 минут до бана на 10 дней.",
-    '5.2': "5.2. Порядок общения: Конфликты с администрацией по поводу их действий запрещены в общем чате. Все жалобы подаются в установленном порядке (см. п. 1.4). Наказание: По усмотрению администрации.",
-    '5.3': "5.3. Помеха работе: Запрещен спам в личные сообщения админов, злоупотребление жалобами, командами вызова (!Позвать админов) и поддержкой. Наказание: Бан на 1 день.",
-    '5.4': "5.4. Выдача себя за администратора: Запрещена в любой форме. Наказание: Бан на 7 дней и занесение в чёрный список администрации (пожизненный запрет на занятие должности).",
-    '5.5': "5.5. Обман администрации: Запрещен любой обман администрации. Наказание: бан от 30 дней (/ban) до бессрочной блокировки (/permban).",
-    '6.1': "6.1. Команда @all: Её использование с 00:00 до 08:00 по МСК запрещено. Запрещено злоупотребление в личных целях. Разрешено: для важных объявлений, вопросов к сообществу, поздравлений. Наказание: Мут на 60-120 минут.",
-    '6.2': "6.2. Дискуссии на сложные темы: Обсуждение политики с целью оскорбления или дезинформации запрещено. Наказание: Мут на 60-120 минут.",
-    '6.3': "6.3. Право на усмотрение: Администрация оставляет за собой право применять наказания по своему усмотрению за действия, которые сочтёт неприемлемыми и наносящими вред сообществу, даже если они прямо не прописаны в правилах.",
-    '6.4': "6.4. Изменение правил: Администрация может изменять настоящий свод правил без предварительного уведомления. Актуальная версия всегда доступна для ознакомления."
+    '1.4': "1.4. Порядок обжалования: Жалобы подаются в специальном обсуждении.",
+    '2.1': "2.1. Мультиаккаунты: Не более 3 аккаунтов. Наказание: Бессрочная блокировка.",
+    '2.4': "2.4. Помеха игре: Мут 15 минут.",
+    '3.1': "3.1. Спам и флуд: Мут 30 минут.",
+    '3.2': "3.2. Конфликты и провокации: Предупреждение или бан до 5 дней.",
+    '3.3': "3.3. Оскорбления участников: Мут 30 минут или бан 3-7 дней.",
+    '3.4': "3.4. Добавление без согласия: Предупреждение, затем бан.",
+    '3.5': "3.5. Аморальные действия: Бессрочное предупреждение + STRIKE.",
+    '4.1': "4.1. Угрозы: Бессрочная блокировка.",
+    '4.2': "4.2. Клевета: Бан от 20 дней до бессрочного.",
+    '4.3': "4.3. Реклама: Бан от 30 дней до бессрочного.",
+    '4.4': "4.4. Дискредитация проекта: Мут 300 минут.",
+    '4.5': "4.5. Обман: Бан от 30 дней до бессрочного.",
+    '5.1': "5.1. Оскорбление администрации: Мут от 180 минут до бана 10 дней.",
+    '5.2': "5.2. Конфликты с администрацией запрещены.",
+    '5.3': "5.3. Спам админам: Бан 1 день.",
+    '5.4': "5.4. Выдача себя за админа: Бан 7 дней.",
+    '5.5': "5.5. Обман администрации: Бан от 30 дней до бессрочного.",
+    '6.1': "6.1. Упоминание всех с 00:00 до 08:00 запрещено: Мут 60-120 минут.",
+    '6.2': "6.2. Оскорбительные дискуссии: Мут 60-120 минут.",
+    '6.3': "6.3. Право на усмотрение администрации.",
+    '6.4': "6.4. Правила могут меняться без уведомления."
 }
 
-# Описания нарушений с наказаниями
 PUNISHMENT_TYPES = {
-    '3.1': {'type': 'mute', 'duration': '30', 'unit': 'минут', 'reason': 'Спам/флуд'},
-    '3.2': {'type': 'warn', 'duration': '10', 'unit': 'дней', 'reason': 'Конфликты/провокации'},
-    '3.3': {'type': 'mute', 'duration': '30', 'unit': 'минут', 'reason': 'Оскорбление участника'},
-    '3.4': {'type': 'warn', 'duration': '10', 'unit': 'дней', 'reason': 'Добавление без согласия'},
-    '3.5': {'type': 'immoral', 'reason': 'Аморальные действия'},
-    '4.1': {'type': 'permban', 'reason': 'Угрозы/экстремизм'},
-    '4.2': {'type': 'ban', 'duration': '20', 'unit': 'дней', 'reason': 'Дезинформация/клевета'},
-    '4.3': {'type': 'ban', 'duration': '30', 'unit': 'дней', 'reason': 'Реклама/пиар'},
-    '4.4': {'type': 'mute', 'duration': '300', 'unit': 'минут', 'reason': 'Дискредитация проекта'},
-    '4.5': {'type': 'ban', 'duration': '30', 'unit': 'дней', 'reason': 'Обман/СКАМ'},
-    '5.1': {'type': 'mute', 'duration': '180', 'unit': 'минут', 'reason': 'Оскорбление администрации'},
-    '5.2': {'type': 'warn', 'duration': '10', 'unit': 'дней', 'reason': 'Конфликт с администрацией'},
-    '5.3': {'type': 'ban', 'duration': '1', 'unit': 'день', 'reason': 'Спам админам'},
-    '5.4': {'type': 'ban', 'duration': '7', 'unit': 'дней', 'reason': 'Выдача себя за админа'},
-    '5.5': {'type': 'ban', 'duration': '30', 'unit': 'дней', 'reason': 'Обман администрации'},
-    '6.1': {'type': 'mute', 'duration': '60', 'unit': 'минут', 'reason': '@all ночью'},
-    '6.2': {'type': 'mute', 'duration': '60', 'unit': 'минут', 'reason': 'Политика'},
-    '1.3': {'type': 'kick', 'reason': 'Нарушение возрастного ограничения'},
-    '2.1': {'type': 'permban', 'reason': 'Мультиаккаунты'},
-    '2.4': {'type': 'mute', 'duration': '15', 'unit': 'минут', 'reason': 'Помеха игре'}
+    '3.1': {'type': 'mute', 'duration': '30', 'unit': 'минут'},
+    '3.3': {'type': 'mute', 'duration': '30', 'unit': 'минут'},
+    '3.5': {'type': 'immoral'},
+    '4.1': {'type': 'permban'},
+    '4.2': {'type': 'ban', 'duration': '20', 'unit': 'дней'},
+    '4.3': {'type': 'ban', 'duration': '30', 'unit': 'дней'},
+    '4.4': {'type': 'mute', 'duration': '300', 'unit': 'минут'},
+    '4.5': {'type': 'ban', 'duration': '30', 'unit': 'дней'},
+    '5.1': {'type': 'mute', 'duration': '180', 'unit': 'минут'},
+    '5.3': {'type': 'ban', 'duration': '1', 'unit': 'день'},
+    '5.4': {'type': 'ban', 'duration': '7', 'unit': 'дней'},
+    '5.5': {'type': 'ban', 'duration': '30', 'unit': 'дней'},
+    '6.1': {'type': 'mute', 'duration': '60', 'unit': 'минут'},
+    '1.3': {'type': 'kick'},
+    '2.1': {'type': 'permban'},
+    '2.4': {'type': 'mute', 'duration': '15', 'unit': 'минут'}
 }
 
 VIOLATIONS = {
-    'спам': '3.1',
-    'флуд': '3.1',
-    'провокация': '3.2',
-    'конфликт': '3.2',
-    'оскорбление участника': '3.3',
-    'оскорбление участников': '3.3',
-    'оскорбление': 'both_insult',
-    'добавление без согласия': '3.4',
-    'амор': '3.5',
-    'аморал': '3.5',
-    'аморальные действия': '3.5',
-    'угроза': '4.1',
-    'угрозы': '4.1',
-    'клевета': '4.2',
-    'дезинформация': '4.2',
-    'реклама': '4.3',
-    'пиар': '4.3',
-    'дискредитация': '4.4',
-    'оскорбление проекта': '4.4',
-    'обман': '4.5',
-    'скам': '4.5',
-    'оскорбление админа': '5.1',
-    'оскорбление администрации': '5.1',
-    'оскорбления администрации': '5.1',
-    'неуважение к администрации': '5.1',
-    'спам админам': '5.3',
-    'выдача себя за админа': '5.4',
-    'обман администрации': '5.5',
-    'упоминание всех': '6.1',
-    'all': '6.1',
-    'политика': '6.2',
-    '16+': '1.3',
-    'возраст': '1.3',
-    'мультиаккаунты': '2.1',
-    'помеха игре': '2.4'
+    'спам': '3.1', 'флуд': '3.1',
+    'оскорбление участника': '3.3', 'оскорбление участников': '3.3',
+    'амор': '3.5', 'аморал': '3.5', 'аморальные действия': '3.5',
+    'угроза': '4.1', 'угрозы': '4.1',
+    'реклама': '4.3', 'пиар': '4.3',
+    'оскорбление админа': '5.1', 'оскорбление администрации': '5.1',
+    '16+': '1.3', 'возраст': '1.3'
 }
 
 
@@ -299,17 +264,12 @@ def is_asking_about_name(message_text: str) -> bool:
 
 
 def extract_user_id_from_mention(text: str) -> int:
-    # Формат [id123|name]
     match = re.search(r'\[id(\d+)\|', text)
     if match:
         return int(match.group(1))
-    
-    # Формат id123
     match = re.search(r'id(\d+)', text)
     if match:
         return int(match.group(1))
-    
-    # Формат @username или @id123
     match = re.search(r'@([a-zA-Z0-9_]+)', text)
     if match:
         username = match.group(1)
@@ -322,131 +282,79 @@ def extract_user_id_from_mention(text: str) -> int:
             response = vk.utils.resolveScreenName(screen_name=username)
             if response and response.get('type') == 'user':
                 return response.get('object_id')
-        except Exception:
+        except:
             pass
         return None
-    
-    # Прямое число
     match = re.search(r'\b(\d{5,10})\b', text)
     if match:
         return int(match.group(1))
-    
     return None
 
 
 def extract_punishment_command(text: str) -> dict:
     text_lower = text.lower()
-    
     has_punish = any(cmd in text_lower for cmd in PUNISHMENT_COMMANDS)
     if not has_punish:
         return None
-    
     user_id = extract_user_id_from_mention(text)
     if not user_id:
         return None
-    
     punkt_match = re.search(r'(\d+)[\.](\d+)', text_lower)
     punkt = f"{punkt_match.group(1)}.{punkt_match.group(2)}" if punkt_match else None
-    
     for violation, p in VIOLATIONS.items():
         if violation in text_lower:
-            if p != 'both_insult':
-                punkt = p
+            punkt = p
             break
+    return {'user_id': user_id, 'punkt': punkt}
+
+
+def handle_punishment(user_id: int, punkt: str, issuer_id: int) -> str:
+    # ПРЯМАЯ ПРОВЕРКА - БЕЗ ГЛОБАЛЬНЫХ ПЕРЕМЕННЫХ
+    if USER_TOKEN is None or user_api is None:
+        return "❌ Функция наказаний недоступна (токен пользователя не настроен)"
     
-    return {
-        'user_id': user_id,
-        'punkt': punkt,
-        'raw_text': text
-    }
-
-
-def send_punishment_commands(user_id: int, punkt: str, reason_text: str) -> list:
-    commands = []
+    if issuer_id != ADMIN_VK_ID:
+        return "❌ У вас нет прав для выдачи наказаний"
     
     if punkt not in PUNISHMENT_TYPES:
-        return []
+        return f"❌ Пункт {punkt} не найден"
     
-    punishment = PUNISHMENT_TYPES[punkt]
-    p_type = punishment['type']
+    p_type = PUNISHMENT_TYPES[punkt]['type']
+    rule_text = RULES_FULL.get(punkt, "нарушение правил")
     
+    commands = []
     if p_type == 'mute':
-        duration = punishment.get('duration', '30')
-        unit = punishment.get('unit', 'минут')
-        reason = punishment.get('reason', reason_text)
-        commands.append(f"mute @{user_id} {duration} {unit}\n{reason}")
-    
+        duration = PUNISHMENT_TYPES[punkt].get('duration', '30')
+        unit = PUNISHMENT_TYPES[punkt].get('unit', 'минут')
+        commands.append(f"mute @{user_id} {duration} {unit}\n{rule_text}")
     elif p_type == 'ban':
-        duration = punishment.get('duration', '30')
-        unit = punishment.get('unit', 'дней')
-        reason = punishment.get('reason', reason_text)
-        commands.append(f"ban @{user_id} {duration} {unit}\n{reason}")
-    
+        duration = PUNISHMENT_TYPES[punkt].get('duration', '30')
+        unit = PUNISHMENT_TYPES[punkt].get('unit', 'дней')
+        commands.append(f"ban @{user_id} {duration} {unit}\n{rule_text}")
     elif p_type == 'permban':
-        reason = punishment.get('reason', reason_text)
-        commands.append(f"permban @{user_id}\n{reason}")
-    
-    elif p_type == 'warn':
-        duration = punishment.get('duration', '10')
-        unit = punishment.get('unit', 'дней')
-        reason = punishment.get('reason', reason_text)
-        commands.append(f"warn @{user_id} {duration} {unit}\n{reason}")
-    
+        commands.append(f"permban @{user_id}\n{rule_text}")
     elif p_type == 'kick':
-        reason = punishment.get('reason', reason_text)
-        commands.append(f"kick @{user_id}\n{reason}")
-    
+        commands.append(f"kick @{user_id}\n{rule_text}")
     elif p_type == 'immoral':
         commands.append(f"warn @{user_id} 999 лет\nАморальные действия")
         commands.append(f"роль @{user_id} -99")
     
-    return commands
-
-
-def execute_punishment(punish_data: dict, issuer_id: int) -> str:
-    global USER_VK
-    
-    if USER_VK is None:
-        return "❌ Функция наказаний недоступна (токен пользователя не инициализирован)"
-    
-    if issuer_id != ADMIN_VK_ID:
-        return "❌ У вас нет прав для выдачи наказаний. Только разработчик может использовать эту команду."
-    
-    user_id = punish_data['user_id']
-    punkt = punish_data['punkt']
-    
-    if not punkt or punkt not in PUNISHMENT_TYPES:
-        return f"❌ Пункт {punkt} не найден в правилах или для него не настроено наказание"
-    
-    rule_text = RULES_FULL.get(punkt, "нарушение правил")
-    commands = send_punishment_commands(user_id, punkt, rule_text)
-    
-    if not commands:
-        return f"❌ Не удалось сформировать команды для пункта {punkt}"
-    
     try:
-        for command in commands:
-            USER_VK.messages.send(
+        for cmd in commands:
+            user_api.messages.send(
                 peer_id=PUNISHMENT_CHAT_ID,
-                message=command,
+                message=cmd,
                 random_id=get_random_id()
             )
-            logger.info(f"✅ Отправлена команда: {command[:100]}")
-            time.sleep(0.5)
-        
-        emoji = get_random_emoji()
-        return f"⚠️ Пользователь [id{user_id}|] получил наказание по пункту {punkt}: {rule_text} {emoji}"
+            time.sleep(0.3)
+        return f"⚠️ Пользователь [id{user_id}|] получил наказание по пункту {punkt}: {rule_text} {get_random_emoji()}"
     except Exception as e:
-        logger.error(f"❌ Ошибка отправки: {e}")
-        return f"❌ Ошибка при выдаче наказания: {e}"
+        return f"❌ Ошибка: {e}"
 
 
 def safe_text(text: str) -> str:
     text = re.sub(r'@all', 'упоминание всех', text, flags=re.IGNORECASE)
-    text = re.sub(r'\ball\b', 'упоминание всех', text, flags=re.IGNORECASE)
-    text = re.sub(r'@everyone', 'упоминание всех', text, flags=re.IGNORECASE)
     text = re.sub(r'Э᧘ᥙТᥲ Կᥲᴛ', 'беседа', text, flags=re.IGNORECASE)
-    text = re.sub(r'Э᧘ᥙТᥲ', 'беседа', text, flags=re.IGNORECASE)
     text = re.sub(r'@', '', text)
     return text
 
@@ -461,14 +369,12 @@ def generate_ai_response(message: str, user_name: str, user_id: int = None) -> s
     
     # Проверка на команду наказания
     punish_data = extract_punishment_command(clean_message)
-    if punish_data and punish_data.get('user_id'):
-        result = execute_punishment(punish_data, user_id)
-        if result:
-            return result
+    if punish_data and punish_data.get('user_id') and punish_data.get('punkt'):
+        return handle_punishment(punish_data['user_id'], punish_data['punkt'], user_id)
     
     # Проверка на вопрос о создателе
     if is_asking_about_creator(message):
-        return f"Я не хочу говорить об этом, мне кажется и вам не нужно знать! {get_random_emoji()}"
+        return f"Я не хочу говорить об этом! {get_random_emoji()}"
     
     # Проверка на вопрос об имени
     if is_asking_about_name(message):
@@ -483,22 +389,12 @@ def generate_ai_response(message: str, user_name: str, user_id: int = None) -> s
         else:
             return safe_text(f"❌ Пункта {punkt} не существует {get_random_emoji()}")
     
-    # Проверка по описанию нарушения
-    for violation, punkt in VIOLATIONS.items():
-        if violation in clean_message.lower():
-            if punkt == 'both_insult':
-                return safe_text(f"📋 Вы не уточнили какое именно оскорбление, поэтому расскажу за оба:\n\n1️⃣ {RULES_FULL['3.3']}\n\n2️⃣ {RULES_FULL['5.1']} {get_random_emoji()}")
-            elif punkt in RULES_FULL:
-                return safe_text(f"📋 {RULES_FULL[punkt]} {get_random_emoji()}")
-            break
-    
     # Обычный разговор
     prompt = f"""Ты бот Сейч. Ты общаешься с пользователем {user_name}.
 
 ТЫ ОБЫЧНЫЙ ДРУЖЕЛЮБНЫЙ СОБЕСЕДНИК!
 - НИКОГДА не говори о правилах, если не спросили
 - НИКОГДА не говори о создателе
-- НИКОГДА не используй название беседы
 - Отвечай как обычный человек в чате
 
 ОТВЕЧАЙ 2-4 предложениями. Используй 1-2 РАЗНЫХ эмодзи.
@@ -522,7 +418,7 @@ def generate_ai_response(message: str, user_name: str, user_id: int = None) -> s
         return response
     except Exception as e:
         logger.error(f"Ошибка Groq: {e}")
-        return f"Ой, что-то пошло не так! Попробуй еще раз {get_random_emoji()}"
+        return f"Ошибка! Попробуй еще раз {get_random_emoji()}"
 
 
 def send_vk_message(peer_id: int, text: str, reply_to_conv_id: int = None):
@@ -659,7 +555,7 @@ def status():
         "url": RENDER_URL,
         "group_id": VK_GROUP_ID,
         "punishment_chat_id": PUNISHMENT_CHAT_ID,
-        "user_token_available": USER_VK is not None
+        "user_token_available": user_api is not None
     })
 
 
@@ -671,7 +567,7 @@ if __name__ == '__main__':
     print(f"🔌 Порт: {PORT}")
     print(f"🔄 Автопинг: активен")
     print(f"📋 Чат наказаний ID: {PUNISHMENT_CHAT_ID}")
-    print(f"🔑 User Token: {'✅ ДОСТУПЕН' if USER_VK is not None else '❌ НЕДОСТУПЕН'}")
+    print(f"🔑 User Token: {'✅ ДОСТУПЕН' if user_api is not None else '❌ НЕДОСТУПЕН'}")
     print("=" * 50)
     print("💬 Бот готов к работе!")
     print("=" * 50)
