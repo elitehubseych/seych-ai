@@ -66,8 +66,7 @@ user_vk = None
 
 if USER_TOKEN:
     try:
-        user_vk_session = vk_api.VkApi(token=USER_TOKEN)
-        user_vk = user_vk_session.get_api()
+        user_vk = vk_api.VkApi(token=USER_TOKEN).get_api()
         logger.info("✅ Пользовательский VK API инициализирован (для выдачи наказаний)")
         try:
             user_vk.messages.send(
@@ -327,6 +326,11 @@ def extract_user_id_from_mention(text: str) -> int:
             logger.error(f"Ошибка поиска @{username}: {e}")
         return None
     
+    # Прямое число в тексте
+    match = re.search(r'\b(\d{5,10})\b', text)
+    if match:
+        return int(match.group(1))
+    
     return None
 
 
@@ -358,7 +362,6 @@ def extract_punishment_command(text: str) -> dict:
 
 
 def send_punishment_commands(user_id: int, punkt: str, reason_text: str) -> list:
-    """Отправляет команды наказания в чат"""
     commands = []
     
     if punkt not in PUNISHMENT_TYPES:
@@ -403,8 +406,9 @@ def send_punishment_commands(user_id: int, punkt: str, reason_text: str) -> list
 def execute_punishment(punish_data: dict, issuer_id: int) -> str:
     global user_vk
     
-    # ПРЯМАЯ ПРОВЕРКА
+    # ЖЕСТКАЯ ПРОВЕРКА
     if user_vk is None:
+        logger.error("execute_punishment: user_vk = None!")
         return "❌ Функция наказаний недоступна (токен пользователя не инициализирован)"
     
     if issuer_id != ADMIN_VK_ID:
@@ -672,6 +676,11 @@ if __name__ == '__main__':
     print(f"🔑 User Token: {'✅ ДОСТУПЕН' if user_vk is not None else '❌ НЕДОСТУПЕН'}")
     print("=" * 50)
     print("💬 Бот готов к работе!")
+    print("=" * 50)
+    print("📋 КОМАНДЫ НАКАЗАНИЙ:")
+    print("   ✅ сейч накажи @username по 3.3")
+    print("   ✅ сейч накажи id123456 по 3.3")
+    print("   ✅ сейч накажи 123456 по 3.3")
     print("=" * 50)
     
     app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
