@@ -30,9 +30,6 @@ PORT = int(os.getenv('PORT', 5000))
 # ID чата для выполнения команд наказания
 PUNISHMENT_CHAT_ID = 2000000206
 
-# ГЛОБАЛЬНАЯ ПЕРЕМЕННАЯ ДЛЯ ТОКЕНА ПОЛЬЗОВАТЕЛЯ
-user_vk = None
-
 # Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
@@ -64,13 +61,15 @@ except Exception as e:
     logger.error(f"❌ Ошибка VK API: {e}")
     exit(1)
 
-# Инициализация пользовательского VK API (для наказаний) - ЗАПИСЫВАЕМ В ГЛОБАЛЬНУЮ
+# Инициализация пользовательского VK API (для наказаний)
+USER_VK = None  # Глобальная переменная
+
 if USER_TOKEN:
     try:
-        user_vk = vk_api.VkApi(token=USER_TOKEN).get_api()
+        USER_VK = vk_api.VkApi(token=USER_TOKEN).get_api()
         logger.info("✅ Пользовательский VK API инициализирован (для выдачи наказаний)")
         try:
-            user_vk.messages.send(
+            USER_VK.messages.send(
                 peer_id=PUNISHMENT_CHAT_ID,
                 message="✅ Бот запущен, токен работает!",
                 random_id=get_random_id()
@@ -80,7 +79,7 @@ if USER_TOKEN:
             logger.warning(f"⚠️ Не удалось отправить тестовое сообщение: {e}")
     except Exception as e:
         logger.error(f"❌ Ошибка инициализации пользовательского VK API: {e}")
-        user_vk = None
+        USER_VK = None
 else:
     logger.warning("⚠️ USER_TOKEN не найден - функция выдачи наказаний будет недоступна")
 
@@ -405,9 +404,9 @@ def send_punishment_commands(user_id: int, punkt: str, reason_text: str) -> list
 
 
 def execute_punishment(punish_data: dict, issuer_id: int) -> str:
-    global user_vk
+    global USER_VK
     
-    if user_vk is None:
+    if USER_VK is None:
         return "❌ Функция наказаний недоступна (токен пользователя не инициализирован)"
     
     if issuer_id != ADMIN_VK_ID:
@@ -427,7 +426,7 @@ def execute_punishment(punish_data: dict, issuer_id: int) -> str:
     
     try:
         for command in commands:
-            user_vk.messages.send(
+            USER_VK.messages.send(
                 peer_id=PUNISHMENT_CHAT_ID,
                 message=command,
                 random_id=get_random_id()
@@ -660,7 +659,7 @@ def status():
         "url": RENDER_URL,
         "group_id": VK_GROUP_ID,
         "punishment_chat_id": PUNISHMENT_CHAT_ID,
-        "user_token_available": user_vk is not None
+        "user_token_available": USER_VK is not None
     })
 
 
@@ -672,14 +671,9 @@ if __name__ == '__main__':
     print(f"🔌 Порт: {PORT}")
     print(f"🔄 Автопинг: активен")
     print(f"📋 Чат наказаний ID: {PUNISHMENT_CHAT_ID}")
-    print(f"🔑 User Token: {'✅ ДОСТУПЕН' if user_vk is not None else '❌ НЕДОСТУПЕН'}")
+    print(f"🔑 User Token: {'✅ ДОСТУПЕН' if USER_VK is not None else '❌ НЕДОСТУПЕН'}")
     print("=" * 50)
     print("💬 Бот готов к работе!")
-    print("=" * 50)
-    print("📋 КОМАНДЫ НАКАЗАНИЙ:")
-    print("   ✅ сейч накажи id739673001 3.3")
-    print("   ✅ сейч накажи @otmetil_sosi_mne 3.3")
-    print("   ✅ сейч накажи 739673001 3.3")
     print("=" * 50)
     
     app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
