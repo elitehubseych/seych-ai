@@ -62,21 +62,26 @@ except Exception as e:
     exit(1)
 
 # Инициализация пользовательского VK API (для наказаний)
-user_vk_session = None
 user_vk = None
 user_token_available = False
 
 if USER_TOKEN:
     try:
+        # Создаем сессию с токеном пользователя
         user_vk_session = vk_api.VkApi(token=USER_TOKEN)
         user_vk = user_vk_session.get_api()
-        # Проверяем, что токен работает
-        test = user_vk.account.getInfo()
-        user_token_available = True
-        logger.info("✅ Пользовательский VK API инициализирован (для выдачи наказаний)")
+        # Проверяем, что токен работает - отправляем тестовое сообщение
+        try:
+            # Простая проверка - получаем информацию об аккаунте
+            user_vk.account.getInfo()
+            user_token_available = True
+            logger.info("✅ Пользовательский VK API инициализирован (для выдачи наказаний)")
+        except Exception as e:
+            logger.error(f"❌ Токен пользователя невалиден: {e}")
+            user_vk = None
+            user_token_available = False
     except Exception as e:
-        logger.error(f"❌ Ошибка пользовательского VK API: {e}")
-        user_vk_session = None
+        logger.error(f"❌ Ошибка инициализации пользовательского VK API: {e}")
         user_vk = None
         user_token_available = False
 else:
@@ -334,6 +339,8 @@ def extract_punishment_command(text: str) -> dict:
 
 
 def execute_punishment(punish_data: dict, issuer_id: int) -> str:
+    global user_vk, user_token_available
+    
     if not user_token_available or user_vk is None:
         return "❌ Функция наказаний недоступна (токен пользователя не инициализирован или недействителен)"
     
