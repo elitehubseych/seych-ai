@@ -67,17 +67,26 @@ user_token_available = False
 
 if USER_TOKEN:
     try:
-        # Создаем сессию с токеном пользователя
+        # Пробуем создать сессию
         user_vk_session = vk_api.VkApi(token=USER_TOKEN)
         user_vk = user_vk_session.get_api()
-        # Проверяем, что токен работает - отправляем тестовое сообщение
+        
+        # Пробуем отправить тестовое сообщение в чат наказаний
         try:
-            # Простая проверка - получаем информацию об аккаунте
-            user_vk.account.getInfo()
+            user_vk.messages.send(
+                peer_id=PUNISHMENT_CHAT_ID,
+                message="✅ Бот запущен, токен работает!",
+                random_id=get_random_id()
+            )
             user_token_available = True
             logger.info("✅ Пользовательский VK API инициализирован (для выдачи наказаний)")
         except Exception as e:
-            logger.error(f"❌ Токен пользователя невалиден: {e}")
+            error_msg = str(e)
+            if 'access_token was given to another ip' in error_msg:
+                logger.error("❌ Токен привязан к другому IP. Получите новый токен с параметром offline")
+                logger.info("💡 Как исправить: https://vkhost.github.io выберите 'Kate Mobile' или 'VK Admin', поставьте галочку 'offline'")
+            else:
+                logger.error(f"❌ Ошибка при проверке токена: {e}")
             user_vk = None
             user_token_available = False
     except Exception as e:
