@@ -30,6 +30,9 @@ PORT = int(os.getenv('PORT', 5000))
 # ID чата для выполнения команд наказания
 PUNISHMENT_CHAT_ID = 2000000206
 
+# ГЛОБАЛЬНАЯ ПЕРЕМЕННАЯ ДЛЯ ТОКЕНА ПОЛЬЗОВАТЕЛЯ
+user_vk = None
+
 # Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
@@ -61,9 +64,7 @@ except Exception as e:
     logger.error(f"❌ Ошибка VK API: {e}")
     exit(1)
 
-# Инициализация пользовательского VK API (для наказаний)
-user_vk = None
-
+# Инициализация пользовательского VK API (для наказаний) - ЗАПИСЫВАЕМ В ГЛОБАЛЬНУЮ
 if USER_TOKEN:
     try:
         user_vk = vk_api.VkApi(token=USER_TOKEN).get_api()
@@ -403,9 +404,10 @@ def send_punishment_commands(user_id: int, punkt: str, reason_text: str) -> list
     return commands
 
 
-def execute_punishment(punish_data: dict, issuer_id: int, user_vk_obj) -> str:
-    # user_vk_obj передаем как аргумент
-    if user_vk_obj is None:
+def execute_punishment(punish_data: dict, issuer_id: int) -> str:
+    global user_vk
+    
+    if user_vk is None:
         return "❌ Функция наказаний недоступна (токен пользователя не инициализирован)"
     
     if issuer_id != ADMIN_VK_ID:
@@ -425,7 +427,7 @@ def execute_punishment(punish_data: dict, issuer_id: int, user_vk_obj) -> str:
     
     try:
         for command in commands:
-            user_vk_obj.messages.send(
+            user_vk.messages.send(
                 peer_id=PUNISHMENT_CHAT_ID,
                 message=command,
                 random_id=get_random_id()
@@ -451,8 +453,6 @@ def safe_text(text: str) -> str:
 
 
 def generate_ai_response(message: str, user_name: str, user_id: int = None) -> str:
-    global user_vk
-    
     clean_message = message
     for keyword in KEYWORDS:
         if clean_message.lower().startswith(keyword):
@@ -460,10 +460,10 @@ def generate_ai_response(message: str, user_name: str, user_id: int = None) -> s
             clean_message = clean_message.lstrip(',').strip()
             break
     
-    # Проверка на команду наказания - ПЕРЕДАЕМ user_vk
+    # Проверка на команду наказания
     punish_data = extract_punishment_command(clean_message)
     if punish_data and punish_data.get('user_id'):
-        result = execute_punishment(punish_data, user_id, user_vk)
+        result = execute_punishment(punish_data, user_id)
         if result:
             return result
     
@@ -675,6 +675,11 @@ if __name__ == '__main__':
     print(f"🔑 User Token: {'✅ ДОСТУПЕН' if user_vk is not None else '❌ НЕДОСТУПЕН'}")
     print("=" * 50)
     print("💬 Бот готов к работе!")
+    print("=" * 50)
+    print("📋 КОМАНДЫ НАКАЗАНИЙ:")
+    print("   ✅ сейч накажи id739673001 3.3")
+    print("   ✅ сейч накажи @otmetil_sosi_mne 3.3")
+    print("   ✅ сейч накажи 739673001 3.3")
     print("=" * 50)
     
     app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
