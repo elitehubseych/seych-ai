@@ -63,13 +63,11 @@ except Exception as e:
 
 # Инициализация пользовательского VK API (для наказаний)
 user_vk = None
-user_token_available = False
 
 if USER_TOKEN:
     try:
         user_vk_session = vk_api.VkApi(token=USER_TOKEN)
         user_vk = user_vk_session.get_api()
-        user_token_available = True
         logger.info("✅ Пользовательский VK API инициализирован (для выдачи наказаний)")
         try:
             user_vk.messages.send(
@@ -83,7 +81,6 @@ if USER_TOKEN:
     except Exception as e:
         logger.error(f"❌ Ошибка инициализации пользовательского VK API: {e}")
         user_vk = None
-        user_token_available = False
 else:
     logger.warning("⚠️ USER_TOKEN не найден - функция выдачи наказаний будет недоступна")
 
@@ -397,7 +394,6 @@ def send_punishment_commands(user_id: int, punkt: str, reason_text: str) -> list
         commands.append(f"kick @{user_id}\n{reason}")
     
     elif p_type == 'immoral':
-        # Аморальные действия: сначала warn 999 лет, потом роль -99
         commands.append(f"warn @{user_id} 999 лет\nАморальные действия")
         commands.append(f"роль @{user_id} -99")
     
@@ -405,10 +401,11 @@ def send_punishment_commands(user_id: int, punkt: str, reason_text: str) -> list
 
 
 def execute_punishment(punish_data: dict, issuer_id: int) -> str:
-    global user_vk, user_token_available
+    global user_vk
     
-    if not user_token_available or user_vk is None:
-        return "❌ Функция наказаний недоступна (токен пользователя не инициализирован или недействителен)"
+    # ПРЯМАЯ ПРОВЕРКА
+    if user_vk is None:
+        return "❌ Функция наказаний недоступна (токен пользователя не инициализирован)"
     
     if issuer_id != ADMIN_VK_ID:
         return "❌ У вас нет прав для выдачи наказаний. Только разработчик может использовать эту команду."
@@ -419,16 +416,12 @@ def execute_punishment(punish_data: dict, issuer_id: int) -> str:
     if not punkt or punkt not in PUNISHMENT_TYPES:
         return f"❌ Пункт {punkt} не найден в правилах или для него не настроено наказание"
     
-    # Получаем текст правила
     rule_text = RULES_FULL.get(punkt, "нарушение правил")
-    
-    # Получаем команды наказания
     commands = send_punishment_commands(user_id, punkt, rule_text)
     
     if not commands:
         return f"❌ Не удалось сформировать команды для пункта {punkt}"
     
-    # Отправляем все команды в чат наказаний
     try:
         for command in commands:
             user_vk.messages.send(
@@ -437,7 +430,7 @@ def execute_punishment(punish_data: dict, issuer_id: int) -> str:
                 random_id=get_random_id()
             )
             logger.info(f"✅ Отправлена команда: {command[:100]}")
-            time.sleep(0.5)  # Небольшая задержка между командами
+            time.sleep(0.5)
         
         emoji = get_random_emoji()
         return f"⚠️ Пользователь [id{user_id}|] получил наказание по пункту {punkt}: {rule_text} {emoji}"
@@ -664,7 +657,7 @@ def status():
         "url": RENDER_URL,
         "group_id": VK_GROUP_ID,
         "punishment_chat_id": PUNISHMENT_CHAT_ID,
-        "user_token_available": user_token_available
+        "user_token_available": user_vk is not None
     })
 
 
@@ -676,7 +669,7 @@ if __name__ == '__main__':
     print(f"🔌 Порт: {PORT}")
     print(f"🔄 Автопинг: активен")
     print(f"📋 Чат наказаний ID: {PUNISHMENT_CHAT_ID}")
-    print(f"🔑 User Token: {'✅ ДОСТУПЕН' if user_token_available else '❌ НЕДОСТУПЕН'}")
+    print(f"🔑 User Token: {'✅ ДОСТУПЕН' if user_vk is not None else '❌ НЕДОСТУПЕН'}")
     print("=" * 50)
     print("💬 Бот готов к работе!")
     print("=" * 50)
