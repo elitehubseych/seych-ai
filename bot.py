@@ -121,8 +121,11 @@ def extract_user_id(text):
     if m: return int(m.group(1))
     return None
 
-def send_punishment(user_id, punkt, issuer_id, user_vk_obj):
-    if user_vk_obj is None:
+def send_punishment(user_id, punkt, issuer_id):
+    # ИСПОЛЬЗУЕМ ГЛОБАЛЬНУЮ ПЕРЕМЕННУЮ НАПРЯМУЮ
+    global USER_VK
+    
+    if USER_VK is None:
         return "❌ Токен пользователя не настроен"
     
     if issuer_id != ADMIN_VK_ID:
@@ -136,17 +139,17 @@ def send_punishment(user_id, punkt, issuer_id, user_vk_obj):
     
     try:
         if ptype == 'mute':
-            user_vk_obj.messages.send(peer_id=PUNISHMENT_CHAT_ID, message=f"mute @{user_id} {duration}\n{rule_text}", random_id=get_random_id())
+            USER_VK.messages.send(peer_id=PUNISHMENT_CHAT_ID, message=f"mute @{user_id} {duration}\n{rule_text}", random_id=get_random_id())
         elif ptype == 'ban':
-            user_vk_obj.messages.send(peer_id=PUNISHMENT_CHAT_ID, message=f"ban @{user_id} {duration}\n{rule_text}", random_id=get_random_id())
+            USER_VK.messages.send(peer_id=PUNISHMENT_CHAT_ID, message=f"ban @{user_id} {duration}\n{rule_text}", random_id=get_random_id())
         elif ptype == 'permban':
-            user_vk_obj.messages.send(peer_id=PUNISHMENT_CHAT_ID, message=f"permban @{user_id}\n{rule_text}", random_id=get_random_id())
+            USER_VK.messages.send(peer_id=PUNISHMENT_CHAT_ID, message=f"permban @{user_id}\n{rule_text}", random_id=get_random_id())
         elif ptype == 'kick':
-            user_vk_obj.messages.send(peer_id=PUNISHMENT_CHAT_ID, message=f"kick @{user_id}\n{rule_text}", random_id=get_random_id())
+            USER_VK.messages.send(peer_id=PUNISHMENT_CHAT_ID, message=f"kick @{user_id}\n{rule_text}", random_id=get_random_id())
         elif ptype == 'immoral':
-            user_vk_obj.messages.send(peer_id=PUNISHMENT_CHAT_ID, message=f"warn @{user_id} 999 лет\nАморальные действия", random_id=get_random_id())
+            USER_VK.messages.send(peer_id=PUNISHMENT_CHAT_ID, message=f"warn @{user_id} 999 лет\nАморальные действия", random_id=get_random_id())
             time.sleep(0.5)
-            user_vk_obj.messages.send(peer_id=PUNISHMENT_CHAT_ID, message=f"роль @{user_id} -99", random_id=get_random_id())
+            USER_VK.messages.send(peer_id=PUNISHMENT_CHAT_ID, message=f"роль @{user_id} -99", random_id=get_random_id())
         
         return f"⚠️ [id{user_id}|] получил наказание по пункту {punkt}: {rule_text} {get_random_emoji()}"
     except Exception as e:
@@ -177,7 +180,7 @@ def generate_response(message, user_name, user_id):
                     punkt = p
                     break
         if punkt:
-            return send_punishment(uid, punkt, user_id, USER_VK)
+            return send_punishment(uid, punkt, user_id)
     
     # Вопрос о правиле
     m = re.search(r'(\d+\.\d+)', clean)
