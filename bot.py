@@ -295,15 +295,29 @@ def is_asking_about_name(message_text: str) -> bool:
 
 
 def extract_user_id_from_mention(text: str) -> int:
+    # Формат [id123|name]
     match = re.search(r'\[id(\d+)\|', text)
     if match:
         return int(match.group(1))
+    
+    # Формат id123
     match = re.search(r'id(\d+)', text)
     if match:
         return int(match.group(1))
+    
+    # Формат @username - пробуем получить ID
     match = re.search(r'@([a-zA-Z0-9_]+)', text)
     if match:
+        username = match.group(1)
+        try:
+            # Используем VK API для поиска по короткому имени
+            response = vk.utils.resolveScreenName(screen_name=username)
+            if response and response.get('type') == 'user':
+                return response.get('object_id')
+        except Exception as e:
+            logger.error(f"Ошибка поиска пользователя @{username}: {e}")
         return None
+    
     return None
 
 
