@@ -6,12 +6,15 @@ import threading
 import re
 import requests
 import random
+from datetime import datetime, timedelta
 
 from flask import Flask, request, jsonify
 import vk_api
 from vk_api.utils import get_random_id
 from dotenv import load_dotenv
 from groq import Groq
+import psycopg2
+from psycopg2.extras import DictCursor
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -22,6 +25,7 @@ VK_GROUP_ID = int(os.getenv('VK_GROUP_ID', '0'))
 GROQ_API_KEY = os.getenv('GROQ_API_KEY')
 ADMIN_VK_ID = int(os.getenv('ADMIN_VK_ID', '0'))
 RENDER_URL = os.getenv('RENDER_URL', 'https://seych-ai.onrender.com')
+DATABASE_URL = os.getenv('DATABASE_URL')  # PostgreSQL URL от Render
 
 CONFIRMATION_CODE = "eb59e42a"
 PORT = int(os.getenv('PORT', 5000))
@@ -38,6 +42,223 @@ werkzeug_logger = logging.getLogger('werkzeug')
 werkzeug_logger.setLevel(logging.ERROR)
 httpx_logger = logging.getLogger('httpx')
 httpx_logger.setLevel(logging.WARNING)
+
+# ========== ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ==========
+conn = None
+cursor = None
+
+def init_db():
+    global conn, cursor
+    if not DATABASE_URL:
+        logger.warning("⚠️ DATABASE_URL не найден, использую временную память")
+        return None
+    
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        # Создаем таблицу пользователей
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                user_id BIGINT PRIMARY KEY,
+                user_name VARCHAR(255),
+                rating INT DEFAULT 0,
+                status VARCHAR(20) DEFAULT 'neutral',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Создаем таблицу памяти (контекст)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_memory (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT,
+                memory_key VARCHAR(255),
+                memory_value TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+            )
+        ''')
+        
+        # Создаем таблицу истории сообщений
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS message_history (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT,
+                message TEXT,
+                response TEXT,
+                sentiment INT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+            )
+        ''')
+        
+        conn.commit()
+        logger.info("✅ PostgreSQL база данных инициализирована")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка инициализации БД: {e}")
+        return None
+
+# Инициализируем БД
+db_available = init_db()
+
+# Временное хранилище в памяти (если нет БД)
+temp_ratings = {}
+temp_memory = {}
+temp_history = {}
+
+def get_user_rating(user_id: int) -> int:
+    """Получает рейтинг пользователя"""
+    if db_available:
+        try:
+            cursor.execute("SELECT rating FROM users WHERE user_id = %s", (user_id,))
+            result = cursor.fetchone()
+            if result:
+                return result[0]
+            return 0
+        except:
+            return 0
+    else:
+        return temp_ratings.get(user_id, 0)
+
+def set_user_rating(user_id: int, rating: int, user_name: str = None):
+    """Устанавливает рейтинг пользователя"""
+    status = "good" if rating >= 0 else "bad"
+    if rating >= 0:
+        status = "good" if rating > 0 else "neutral"
+    else:
+        status = "bad"
+    
+    if db_available:
+        try:
+            cursor.execute('''
+                INSERT INTO users (user_id, user_name, rating, status, updated_at)
+                VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (user_id) 
+                DO UPDATE SET rating = %s, user_name = %s, status = %s, updated_at = CURRENT_TIMESTAMP
+            ''', (user_id, user_name, rating, status, rating, user_name, status))
+            conn.commit()
+        except Exception as e:
+            logger.error(f"Ошибка установки рейтинга: {e}")
+    else:
+        temp_ratings[user_id] = rating
+
+def update_rating_from_message(message: str, user_id: int, user_name: str = None):
+    """Обновляет рейтинг пользователя на основе сообщения"""
+    current_rating = get_user_rating(user_id)
+    message_lower = message.lower()
+    
+    # Словари для оценки тональности
+    positive_words = ['спасибо', 'хорошо', 'отлично', 'классно', 'супер', 'молодец', 'умница', 'круто', 'приятно', 'рад', 'люблю']
+    negative_words = ['плохо', 'ужасно', 'бесит', 'надоел', 'тупой', 'лох', 'идиот', 'дебил', 'сволочь', 'гад', 'хватит', 'заткнись', 'уйди', 'иди нахуй', 'ты еблан']
+    
+    positive_count = sum(1 for word in positive_words if word in message_lower)
+    negative_count = sum(1 for word in negative_words if word in message_lower)
+    
+    # Изменение рейтинга
+    change = 0
+    if positive_count > negative_count:
+        change = min(positive_count, 2)  # максимум +2 за сообщение
+    elif negative_count > positive_count:
+        change = -min(negative_count, 2)  # максимум -2 за сообщение
+    
+    if change != 0:
+        new_rating = max(-10, min(10, current_rating + change))
+        set_user_rating(user_id, new_rating, user_name)
+        return new_rating
+    return current_rating
+
+def get_user_status(user_id: int) -> str:
+    """Возвращает статус пользователя: хороший/плохой"""
+    rating = get_user_rating(user_id)
+    if rating <= -5:
+        return "очень плохой"
+    elif rating < 0:
+        return "плохой"
+    elif rating == 0:
+        return "нейтральный"
+    elif rating <= 5:
+        return "хороший"
+    else:
+        return "отличный"
+
+def save_memory(user_id: int, key: str, value: str):
+    """Сохраняет информацию в память бота"""
+    if db_available:
+        try:
+            cursor.execute('''
+                INSERT INTO user_memory (user_id, memory_key, memory_value)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (user_id, memory_key) DO UPDATE SET memory_value = %s
+            ''', (user_id, key, value, value))
+            conn.commit()
+            return True
+        except:
+            # Если нет уникального ограничения, удаляем старое и вставляем новое
+            try:
+                cursor.execute("DELETE FROM user_memory WHERE user_id = %s AND memory_key = %s", (user_id, key))
+                cursor.execute("INSERT INTO user_memory (user_id, memory_key, memory_value) VALUES (%s, %s, %s)", (user_id, key, value))
+                conn.commit()
+            except:
+                pass
+            return True
+    else:
+        if user_id not in temp_memory:
+            temp_memory[user_id] = {}
+        temp_memory[user_id][key] = value
+        return True
+
+def get_memory(user_id: int, key: str) -> str:
+    """Получает информацию из памяти бота"""
+    if db_available:
+        try:
+            cursor.execute("SELECT memory_value FROM user_memory WHERE user_id = %s AND memory_key = %s", (user_id, key))
+            result = cursor.fetchone()
+            if result:
+                return result[0]
+            return None
+        except:
+            return None
+    else:
+        return temp_memory.get(user_id, {}).get(key, None)
+
+def get_all_memories(user_id: int) -> dict:
+    """Получает всю память пользователя"""
+    if db_available:
+        try:
+            cursor.execute("SELECT memory_key, memory_value FROM user_memory WHERE user_id = %s", (user_id,))
+            results = cursor.fetchall()
+            return {row[0]: row[1] for row in results}
+        except:
+            return {}
+    else:
+        return temp_memory.get(user_id, {})
+
+def save_message_history(user_id: int, message: str, response: str, sentiment: int = 0):
+    """Сохраняет историю сообщений"""
+    if db_available:
+        try:
+            cursor.execute('''
+                INSERT INTO message_history (user_id, message, response, sentiment)
+                VALUES (%s, %s, %s, %s)
+            ''', (user_id, message[:500], response[:500], sentiment))
+            conn.commit()
+        except:
+            pass
+    else:
+        if user_id not in temp_history:
+            temp_history[user_id] = []
+        temp_history[user_id].append({
+            'message': message,
+            'response': response,
+            'sentiment': sentiment,
+            'time': time.time()
+        })
+        # Ограничиваем историю 50 сообщениями
+        if len(temp_history[user_id]) > 50:
+            temp_history[user_id].pop(0)
 
 # ========== ПРОВЕРКИ ==========
 if not VK_TOKEN:
@@ -102,74 +323,47 @@ def get_random_emoji():
     return random.choice(EMOJIS)
 
 
-# ========== ПОЛНЫЕ ПРАВИЛА (ВСЕ ПУНКТЫ ОТ 1 ДО 6) ==========
+# ========== ПОЛНЫЕ ПРАВИЛА ==========
 RULES_FULL = {
-    # РАЗДЕЛ 1 - Общие положения
     '1.1': "1.1. Обязательность: Незнание правил не освобождает от ответственности.",
     '1.2': "1.2. Равенство: Все участники, включая администрацию, равны перед правилами.",
     '1.3': "1.3. Возрастное ограничения: Участие разрешено только лицам старше 16 лет. Нарушение влечет немедленное исключение (/kick).",
-    '1.4': "1.4. Порядок обжалования: Если вы не согласны с наказанием, вы вправе подать апелляцию в специальном отведенном для этого обсуждении. Конфликты с администрацией в общем чате по этому поводу запрещены.",
-    
-    # РАЗДЕЛ 2 - Аккаунты
-    '2.1': "2.1. Мультиаккаунты: Разрешено не более трех аккаунтов на одного пользователя. Запрещен обход наказаний с помощью дополнительных аккаунтов или ботов. Наказание: Бессрочная блокировка (/permban) всех дополнительных аккаунтов и удвоение срока наказания для основного.",
-    '2.4': "2.4. Помеха игровому процессу: Запрещено мешать игре: принудительно завершать, накидывать голосования о завершении без согласия большинства. Наказание: Мут на 15 минут. При 5+ нарушениях в сутки — бан на 1 день.",
-    
-    # РАЗДЕЛ 3 - Поведение и общение
-    '3.1': "3.1. Спам и флуд: Запрещены спам (однотипные сообщения) и флуд (цепочка из 7+ сообщений, «лесенка»). Наказание: Мут (/mute) на 30 минут. За многократные нарушения: внесения в отметку (STRIKE).",
-    '3.2': "3.2. Конфликты и провокации: Запрещены бесцельные конфликты, провокации других участников, подстрекательство к нарушению правил. Наказание: Предупреждение (/warn) или бан (/ban) до 5 дней.",
-    '3.3': "3.3. Уважение к участникам: Запрещены оскорбления, унижение чести и достоинства, агрессивное поведение в отношении ОБЫЧНЫХ УЧАСТНИКОВ. Наказание: Мут на 30 минут или бан от 3 до 7 дней.",
-    '3.4': "3.4. Запрещено добавлять людей в беседу без их согласия. Наказание: Предупреждение (/warn) за 2+ случаев — бан от 3 до 5 дней.",
-    '3.5': "3.5. Аморальные действия: Запрещены любые действия интимного характера, направленные на других участников без их явного, добровольного и однозначного согласия. Наказание: Бессрочное предупреждения (/warn). Также внесения в отметку (STRIKE).",
-    
-    # РАЗДЕЛ 4 - Недопустимый контент и тяжкие нарушения
-    '4.1': "4.1. Угрозы и экстремизм: Строго запрещены: угрозы жизни и здоровью участников, их родных и близких; оскорбление родных и близких; распространение информации, выражающей явное неуважение к государству, его символам или органам власти. Наказание: Бессрочная блокировка (/permban).",
-    '4.2': "4.2. Дезинформация и клевета: Запрещены намеренный обман, клевета, призывы покинуть сообщество на ложной основе, ввод в заблуждение под видом рекламы. Наказание: Бан от 20 дней до бессрочного.",
-    '4.3': "4.3. Реклама и пиар: Запрещена любая несанкционированная реклама, публикация ссылок, пиар других чатов/проектов и переманивание участников. Наказание: Бан от 30 дней до бессрочного.",
-    '4.4': "4.4. Дискредитация проекта: Запрещены оскорбления проекта, его репутации и администрации. Наказание: Мут на 300 минут. При продолжении в ЛС — бан от 30 дней до бессрочного.",
-    '4.5': "4.5. Обман: Запрещен обман и СКАМ участников в любой форме. Наказания: бан от 30 дней (/ban) до бессрочной блокировки (/permban) | Также внесения в отметку (STRIKE) - навсегда.",
-    
-    # РАЗДЕЛ 5 - Отношения к администрации
-    '5.1': "5.1. Уважение к администрации: Запрещены оскорбления, провокации и клевета в адрес АДМИНИСТРАЦИИ. Наказание: Мут от 180 минут до бана на 10 дней.",
-    '5.2': "5.2. Порядок общения: Конфликты с администрацией по поводу их действий запрещены в общем чате. Все жалобы подаются в установленном порядке (см. п. 1.4).",
-    '5.3': "5.3. Помеха работе: Запрещен спам в личные сообщения админов, злоупотребление жалобами, командами вызова (!Позвать админов) и поддержкой. Наказание: Бан на 1 день.",
-    '5.4': "5.4. Выдача себя за администратора: Запрещена в любой форме. Наказание: Бан на 7 дней и занесение в чёрный список администрации (пожизненный запрет на занятие должности).",
-    '5.5': "5.5. Обман администрации: Запрещен любой обман администрации. Наказание: бан от 30 дней (/ban) до бессрочной блокировки (/permban).",
-    
-    # РАЗДЕЛ 6 - Прочее
-    '6.1': "6.1. Команда @all: Её использование с 00:00 до 08:00 по МСК запрещено. Запрещено злоупотребление в личных целях. Разрешено: для важных объявлений, вопросов к сообществу, поздравлений. Наказание: Мут на 60-120 минут.",
-    '6.2': "6.2. Дискуссии на сложные темы: Обсуждение политики с целью оскорбления или дезинформации запрещено. Наказание: Мут на 60-120 минут.",
-    '6.3': "6.3. Право на усмотрение: Администрация оставляет за собой право применять наказания по своему усмотрению за действия, которые сочтёт неприемлемыми и наносящими вред сообществу, даже если они прямо не прописаны в правилах.",
-    '6.4': "6.4. Изменение правил: Администрация может изменять настоящий свод правил без предварительного уведомления. Актуальная версия всегда доступна для ознакомления."
+    '1.4': "1.4. Порядок обжалования: Жалобы подаются в специальном обсуждении. Конфликты с администрацией запрещены.",
+    '2.1': "2.1. Мультиаккаунты: Не более 3 аккаунтов. Наказание: Бессрочная блокировка.",
+    '2.4': "2.4. Помеха игре: Мут на 15 минут.",
+    '3.1': "3.1. Спам и флуд: Мут на 30 минут.",
+    '3.2': "3.2. Конфликты и провокации: Предупреждение или бан до 5 дней.",
+    '3.3': "3.3. Оскорбления участников: Мут на 30 минут или бан 3-7 дней.",
+    '3.4': "3.4. Добавление без согласия: Предупреждение, затем бан.",
+    '3.5': "3.5. Аморальные действия: Бессрочное предупреждение.",
+    '4.1': "4.1. Угрозы: Бессрочная блокировка.",
+    '4.2': "4.2. Клевета: Бан от 20 дней до бессрочного.",
+    '4.3': "4.3. Реклама: Бан от 30 дней до бессрочного.",
+    '4.4': "4.4. Дискредитация проекта: Мут на 300 минут.",
+    '4.5': "4.5. Обман: Бан от 30 дней до бессрочного.",
+    '5.1': "5.1. Оскорбление администрации: Мут от 180 минут до бана на 10 дней.",
+    '5.2': "5.2. Конфликты с администрацией в чате запрещены.",
+    '5.3': "5.3. Спам в ЛС админам: Бан на 1 день.",
+    '5.4': "5.4. Выдача себя за админа: Бан на 7 дней.",
+    '5.5': "5.5. Обман администрации: Бан от 30 дней до бессрочного.",
+    '6.1': "6.1. Упоминание всех с 00:00 до 08:00 запрещено: Мут на 60-120 минут.",
+    '6.2': "6.2. Оскорбительные дискуссии: Мут на 60-120 минут.",
+    '6.3': "6.3. Право на усмотрение администрации.",
+    '6.4': "6.4. Правила могут меняться без уведомления."
 }
 
-# Описания нарушений для поиска
+# Описания нарушений
 VIOLATIONS = {
-    'спам': '3.1',
-    'флуд': '3.1',
-    'провокация': '3.2',
-    'конфликт': '3.2',
-    'оскорбление участника': '3.3',
-    'оскорбление участников': '3.3',
-    'добавление без согласия': '3.4',
-    'амор': '3.5',
-    'угроза': '4.1',
-    'угрозы': '4.1',
-    'клевета': '4.2',
-    'дезинформация': '4.2',
-    'реклама': '4.3',
-    'пиар': '4.3',
-    'дискредитация': '4.4',
-    'оскорбление проекта': '4.4',
-    'обман': '4.5',
-    'скам': '4.5',
-    'оскорбление админа': '5.1',
-    'оскорбление администрации': '5.1',
-    'спам админам': '5.3',
-    'выдача себя за админа': '5.4',
-    'обман администрации': '5.5',
-    'упоминание всех': '6.1',
-    'all': '6.1',
-    'политика': '6.2'
+    'спам': '3.1', 'флуд': '3.1', 'провокация': '3.2', 'конфликт': '3.2',
+    'оскорбление участника': '3.3', 'оскорбление участников': '3.3',
+    'добавление без согласия': '3.4', 'амор': '3.5', 'угроза': '4.1',
+    'угрозы': '4.1', 'клевета': '4.2', 'дезинформация': '4.2',
+    'реклама': '4.3', 'пиар': '4.3', 'дискредитация': '4.4',
+    'оскорбление проекта': '4.4', 'обман': '4.5', 'скам': '4.5',
+    'оскорбление админа': '5.1', 'оскорбление администрации': '5.1',
+    'спам админам': '5.3', 'выдача себя за админа': '5.4',
+    'обман администрации': '5.5', 'упоминание всех': '6.1',
+    'all': '6.1', 'политика': '6.2'
 }
 
 
@@ -248,32 +442,39 @@ def is_asking_about_name(message_text: str) -> bool:
     return False
 
 
-def find_rule_by_description(question: str) -> str:
-    """Ищет правило по описанию нарушения"""
-    question_lower = question.lower()
-    
-    # Проверяем на оскорбление администрации
-    if 'оскорбление админа' in question_lower or 'оскорбление администрации' in question_lower:
-        return "5.1"
-    
-    # Проверяем на оскорбление участника
-    if 'оскорбление участника' in question_lower or 'оскорбление участников' in question_lower:
-        return "3.3"
-    
-    # Если просто "оскорбление" без уточнения - возвращаем оба
-    if 'оскорбление' in question_lower and 'админ' not in question_lower and 'участник' not in question_lower:
-        return "both_insult"
-    
-    # Проверяем по словарю
-    for violation, punkt in VIOLATIONS.items():
-        if violation in question_lower:
-            return punkt
-    
-    return None
+def is_rating_command(message_text: str) -> tuple:
+    """Проверяет команду для получения рейтинга"""
+    text_lower = message_text.lower()
+    if 'рейтинг' in text_lower or 'кто я' in text_lower:
+        return True
+    return False
+
+
+def is_memory_command(message_text: str) -> tuple:
+    """Проверяет команду для запоминания"""
+    text_lower = message_text.lower()
+    if 'запомни' in text_lower:
+        match = re.search(r'запомни\s+(.+?)(?:\s+как\s+|\s+под\s+|\s+на\s+)?(.+)?$', text_lower)
+        if match:
+            value = match.group(1).strip()
+            key = match.group(2).strip() if match.group(2) else 'default'
+            return True, key, value
+    return False, None, None
+
+
+def is_recall_command(message_text: str) -> tuple:
+    """Проверяет команду для вспоминания"""
+    text_lower = message_text.lower()
+    recall_patterns = ['что я говорил', 'что я сказал', 'что ты помнишь', 'что я просил запомнить']
+    for pattern in recall_patterns:
+        if pattern in text_lower:
+            match = re.search(r'(?:что я говорил|что я сказал|что ты помнишь|что я просил запомнить)\s+(?:про\s+)?(.+)?$', text_lower)
+            key = match.group(1).strip() if match and match.group(1) else 'default'
+            return True, key
+    return False, None
 
 
 def safe_text(text: str) -> str:
-    """Убирает @all и название беседы"""
     text = re.sub(r'@all', 'упоминание всех', text, flags=re.IGNORECASE)
     text = re.sub(r'\ball\b', 'упоминание всех', text, flags=re.IGNORECASE)
     text = re.sub(r'@everyone', 'упоминание всех', text, flags=re.IGNORECASE)
@@ -283,8 +484,8 @@ def safe_text(text: str) -> str:
     return text
 
 
-def generate_ai_response(message: str, user_name: str) -> str:
-    """Генерация ответа через Groq"""
+def generate_ai_response(message: str, user_name: str, user_id: int) -> str:
+    """Генерация ответа через Groq с учетом рейтинга пользователя"""
     
     # Получаем текст без ключевого слова
     clean_message = message
@@ -293,6 +494,35 @@ def generate_ai_response(message: str, user_name: str) -> str:
             clean_message = clean_message[len(keyword):].strip()
             clean_message = clean_message.lstrip(',').strip()
             break
+    
+    # Получаем рейтинг пользователя
+    rating = get_user_rating(user_id)
+    status = get_user_status(user_id)
+    
+    # Проверяем команду рейтинга
+    if is_rating_command(clean_message):
+        return f"Вы {status} пользователь, ваш рейтинг: {rating} из 10 😊"
+    
+    # Проверяем команду запоминания
+    is_mem, mem_key, mem_value = is_memory_command(clean_message)
+    if is_mem:
+        save_memory(user_id, mem_key, mem_value)
+        emoji = get_random_emoji()
+        return f"✅ Запомнил: {mem_value} {emoji}"
+    
+    # Проверяем команду вспоминания
+    is_rec, rec_key = is_recall_command(clean_message)
+    if is_rec:
+        mem = get_memory(user_id, rec_key)
+        if mem:
+            emoji = get_random_emoji()
+            return f"🔍 Ты просил запомнить: {mem} {emoji}"
+        else:
+            emoji = get_random_emoji()
+            return f"🤔 Я ничего не помню на эту тему. Может, ты не просил запомнить? {emoji}"
+    
+    # Обновляем рейтинг на основе сообщения
+    update_rating_from_message(clean_message, user_id, user_name)
     
     # Проверяем, спрашивают ли о создателе
     if is_asking_about_creator(message):
@@ -313,39 +543,44 @@ def generate_ai_response(message: str, user_name: str) -> str:
             return safe_text(f"📋 {RULES_FULL[punkt]} {emoji}")
         else:
             emoji = get_random_emoji()
-            return safe_text(f"❌ Пункта {punkt} не существует в правилах. Доступные пункты: 1.1, 1.2, 1.3, 1.4, 2.1, 2.4, 3.1-3.5, 4.1-4.5, 5.1-5.5, 6.1-6.4 {emoji}")
+            return safe_text(f"❌ Пункта {punkt} не существует {emoji}")
     
     # Проверяем по описанию нарушения
-    found_punkt = find_rule_by_description(clean_message)
+    found_punkt = None
+    for violation, punkt in VIOLATIONS.items():
+        if violation in clean_message.lower():
+            found_punkt = punkt
+            break
     
-    if found_punkt == "both_insult":
-        # Отвечаем за оба типа оскорблений
-        emoji1 = get_random_emoji()
-        emoji2 = get_random_emoji()
-        return safe_text(f"""📋 Вы не уточнили какое именно оскорбление, поэтому расскажу за оба:
-
-1️⃣ {RULES_FULL['3.3']} {emoji1}
-
-2️⃣ {RULES_FULL['5.1']} {emoji2}""")
-    
-    elif found_punkt and found_punkt in RULES_FULL:
+    if found_punkt and found_punkt in RULES_FULL:
         emoji = get_random_emoji()
         return safe_text(f"📋 {RULES_FULL[found_punkt]} {emoji}")
     
-    # Обычный разговор
+    # Формируем промпт с учетом рейтинга пользователя
+    if rating <= -5:
+        tone = "Ты злой, грубый, используешь маты, отвечаешь агрессивно. Пользователь к тебе плохо относится, ты отвечаешь ему тем же."
+    elif rating < 0:
+        tone = "Ты немного раздражен, но не грубишь. Отвечаешь сухо и коротко."
+    elif rating == 0:
+        tone = "Ты нейтрален, общаешься вежливо, но без особых эмоций."
+    elif rating <= 5:
+        tone = "Ты дружелюбный, веселый, поддерживаешь разговор."
+    else:
+        tone = "Ты очень дружелюбный, используешь много эмодзи, радуешься общению, называешь пользователя по имени."
+    
     prompt = f"""Ты бот Сейч. Ты общаешься с пользователем {user_name}.
 
-ТЫ ОБЫЧНЫЙ ДРУЖЕЛЮБНЫЙ СОБЕСЕДНИК!
+ТВОЙ ТОН ОБЩЕНИЯ: {tone}
+
 - НИКОГДА не говори о правилах, если не спросили
 - НИКОГДА не говори о создателе
-- НИКОГДА не используй название беседы
-- Отвечай как обычный человек в чате
+- Отвечай естественно, как в реальном чате
 
 ОТВЕЧАЙ 2-4 предложениями. Используй 1-2 РАЗНЫХ эмодзи.
 
 Пользователь написал: "{clean_message}"
 
-Ответь естественно, дружелюбно, с юмором."""
+Ответь естественно, в заданном тоне."""
     
     try:
         completion = groq_client.chat.completions.create(
@@ -359,6 +594,9 @@ def generate_ai_response(message: str, user_name: str) -> str:
         )
         response = completion.choices[0].message.content
         response = safe_text(response)
+        
+        # Сохраняем историю
+        save_message_history(user_id, clean_message, response, rating)
         
         return response
     except Exception as e:
@@ -408,7 +646,7 @@ def handle_message(user_id: int, message_text: str, peer_id: int,
         return
     
     user_name = get_user_name(user_id)
-    ai_response = generate_ai_response(message_text, user_name)
+    ai_response = generate_ai_response(message_text, user_name, user_id)
     
     if ai_response.strip():
         final_message = f"[id{user_id}|{user_name}], {ai_response}"
@@ -499,7 +737,8 @@ def status():
     return jsonify({
         "status": "running",
         "url": RENDER_URL,
-        "group_id": VK_GROUP_ID
+        "group_id": VK_GROUP_ID,
+        "db_available": db_available is not None
     })
 
 
@@ -510,17 +749,15 @@ if __name__ == '__main__':
     print(f"📍 Сервер: {RENDER_URL}")
     print(f"🔌 Порт: {PORT}")
     print(f"🔄 Автопинг: активен")
+    print(f"💾 База данных: {'✅ ПОДКЛЮЧЕНА' if db_available else '❌ НЕДОСТУПНА'}")
     print("=" * 50)
     print("💬 Бот готов к работе!")
     print("=" * 50)
-    print("📋 ВСЕ ПРАВИЛА ЗАГРУЖЕНЫ:")
-    print("   ✅ Раздел 1: 1.1, 1.2, 1.3, 1.4")
-    print("   ✅ Раздел 2: 2.1, 2.4")
-    print("   ✅ Раздел 3: 3.1, 3.2, 3.3, 3.4, 3.5")
-    print("   ✅ Раздел 4: 4.1, 4.2, 4.3, 4.4, 4.5")
-    print("   ✅ Раздел 5: 5.1, 5.2, 5.3, 5.4, 5.5")
-    print("   ✅ Раздел 6: 6.1, 6.2, 6.3, 6.4")
-    print(f"   ✅ Всего пунктов: {len(RULES_FULL)}")
+    print("📋 НОВЫЕ ФУНКЦИИ:")
+    print("   ✅ Система рейтинга пользователей (от -10 до 10)")
+    print("   ✅ Память: 'запомни ананас' и 'что я говорил'")
+    print("   ✅ Адаптивный тон общения под рейтинг")
+    print("   ✅ Команда 'сейч рейтинг' или 'сейч кто я'")
     print("=" * 50)
     
     app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
