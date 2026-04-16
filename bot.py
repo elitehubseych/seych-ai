@@ -25,7 +25,7 @@ VK_GROUP_ID = int(os.getenv('VK_GROUP_ID', '0'))
 GROQ_API_KEY = os.getenv('GROQ_API_KEY')
 ADMIN_VK_ID = int(os.getenv('ADMIN_VK_ID', '0'))
 RENDER_URL = os.getenv('RENDER_URL', 'https://seych-ai.onrender.com')
-DATABASE_URL = os.getenv('DATABASE_URL')  # PostgreSQL URL от Render
+DATABASE_URL = os.getenv('DATABASE_URL')
 
 CONFIRMATION_CODE = "eb59e42a"
 PORT = int(os.getenv('PORT', 5000))
@@ -57,7 +57,6 @@ def init_db():
         conn = psycopg2.connect(DATABASE_URL)
         cursor = conn.cursor()
         
-        # Создаем таблицу пользователей
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id BIGINT PRIMARY KEY,
@@ -69,7 +68,6 @@ def init_db():
             )
         ''')
         
-        # Создаем таблицу памяти (контекст)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS user_memory (
                 id SERIAL PRIMARY KEY,
@@ -81,7 +79,6 @@ def init_db():
             )
         ''')
         
-        # Создаем таблицу истории сообщений
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS message_history (
                 id SERIAL PRIMARY KEY,
@@ -101,16 +98,14 @@ def init_db():
         logger.error(f"❌ Ошибка инициализации БД: {e}")
         return None
 
-# Инициализируем БД
 db_available = init_db()
 
-# Временное хранилище в памяти (если нет БД)
+# Временное хранилище в памяти
 temp_ratings = {}
 temp_memory = {}
 temp_history = {}
 
 def get_user_rating(user_id: int) -> int:
-    """Получает рейтинг пользователя"""
     if db_available:
         try:
             cursor.execute("SELECT rating FROM users WHERE user_id = %s", (user_id,))
@@ -124,12 +119,7 @@ def get_user_rating(user_id: int) -> int:
         return temp_ratings.get(user_id, 0)
 
 def set_user_rating(user_id: int, rating: int, user_name: str = None):
-    """Устанавливает рейтинг пользователя"""
-    status = "good" if rating >= 0 else "bad"
-    if rating >= 0:
-        status = "good" if rating > 0 else "neutral"
-    else:
-        status = "bad"
+    status = "good" if rating > 0 else "bad" if rating < 0 else "neutral"
     
     if db_available:
         try:
@@ -145,24 +135,36 @@ def set_user_rating(user_id: int, rating: int, user_name: str = None):
     else:
         temp_ratings[user_id] = rating
 
+def ensure_user_exists(user_id: int, user_name: str):
+    """Создает пользователя в базе, если его нет"""
+    if db_available:
+        try:
+            cursor.execute("SELECT user_id FROM users WHERE user_id = %s", (user_id,))
+            if not cursor.fetchone():
+                cursor.execute('''
+                    INSERT INTO users (user_id, user_name, rating, status)
+                    VALUES (%s, %s, 0, 'neutral')
+                ''', (user_id, user_name))
+                conn.commit()
+                logger.info(f"✅ Создан новый пользователь: {user_id} - {user_name}")
+        except Exception as e:
+            logger.error(f"Ошибка создания пользователя: {e}")
+
 def update_rating_from_message(message: str, user_id: int, user_name: str = None):
-    """Обновляет рейтинг пользователя на основе сообщения"""
     current_rating = get_user_rating(user_id)
     message_lower = message.lower()
     
-    # Словари для оценки тональности
     positive_words = ['спасибо', 'хорошо', 'отлично', 'классно', 'супер', 'молодец', 'умница', 'круто', 'приятно', 'рад', 'люблю']
     negative_words = ['плохо', 'ужасно', 'бесит', 'надоел', 'тупой', 'лох', 'идиот', 'дебил', 'сволочь', 'гад', 'хватит', 'заткнись', 'уйди', 'иди нахуй', 'ты еблан']
     
     positive_count = sum(1 for word in positive_words if word in message_lower)
     negative_count = sum(1 for word in negative_words if word in message_lower)
     
-    # Изменение рейтинга
     change = 0
     if positive_count > negative_count:
-        change = min(positive_count, 2)  # максимум +2 за сообщение
+        change = min(positive_count, 2)
     elif negative_count > positive_count:
-        change = -min(negative_count, 2)  # максимум -2 за сообщение
+        change = -min(negative_count, 2)
     
     if change != 0:
         new_rating = max(-10, min(10, current_rating + change))
@@ -171,7 +173,6 @@ def update_rating_from_message(message: str, user_id: int, user_name: str = None
     return current_rating
 
 def get_user_status(user_id: int) -> str:
-    """Возвращает статус пользователя: хороший/плохой"""
     rating = get_user_rating(user_id)
     if rating <= -5:
         return "очень плохой"
@@ -185,7 +186,6 @@ def get_user_status(user_id: int) -> str:
         return "отличный"
 
 def save_memory(user_id: int, key: str, value: str):
-    """Сохраняет информацию в память бота"""
     if db_available:
         try:
             cursor.execute('''
@@ -194,16 +194,14 @@ def save_memory(user_id: int, key: str, value: str):
                 ON CONFLICT (user_id, memory_key) DO UPDATE SET memory_value = %s
             ''', (user_id, key, value, value))
             conn.commit()
-            return True
         except:
-            # Если нет уникального ограничения, удаляем старое и вставляем новое
             try:
                 cursor.execute("DELETE FROM user_memory WHERE user_id = %s AND memory_key = %s", (user_id, key))
                 cursor.execute("INSERT INTO user_memory (user_id, memory_key, memory_value) VALUES (%s, %s, %s)", (user_id, key, value))
                 conn.commit()
             except:
                 pass
-            return True
+        return True
     else:
         if user_id not in temp_memory:
             temp_memory[user_id] = {}
@@ -211,7 +209,6 @@ def save_memory(user_id: int, key: str, value: str):
         return True
 
 def get_memory(user_id: int, key: str) -> str:
-    """Получает информацию из памяти бота"""
     if db_available:
         try:
             cursor.execute("SELECT memory_value FROM user_memory WHERE user_id = %s AND memory_key = %s", (user_id, key))
@@ -224,20 +221,7 @@ def get_memory(user_id: int, key: str) -> str:
     else:
         return temp_memory.get(user_id, {}).get(key, None)
 
-def get_all_memories(user_id: int) -> dict:
-    """Получает всю память пользователя"""
-    if db_available:
-        try:
-            cursor.execute("SELECT memory_key, memory_value FROM user_memory WHERE user_id = %s", (user_id,))
-            results = cursor.fetchall()
-            return {row[0]: row[1] for row in results}
-        except:
-            return {}
-    else:
-        return temp_memory.get(user_id, {})
-
 def save_message_history(user_id: int, message: str, response: str, sentiment: int = 0):
-    """Сохраняет историю сообщений"""
     if db_available:
         try:
             cursor.execute('''
@@ -256,7 +240,6 @@ def save_message_history(user_id: int, message: str, response: str, sentiment: i
             'sentiment': sentiment,
             'time': time.time()
         })
-        # Ограничиваем историю 50 сообщениями
         if len(temp_history[user_id]) > 50:
             temp_history[user_id].pop(0)
 
@@ -288,34 +271,26 @@ except Exception as e:
 
 app = Flask(__name__)
 
-# Ключевые слова для активации
+# ========== НАСТРОЙКИ ==========
 KEYWORDS = ['seych', 'seychik', 'сейч', 'сейчик']
-
-# Состояние ИИ для чатов
 ai_enabled_status = {}
-
-# Защита от дублирования
 processed_events = {}
 PROCESSED_EXPIRE = 60
 
-# Команды управления ИИ
 AI_ON_COMMANDS = ['сейч +ии', 'сейчик +ии', 'сейч +ai', 'seych +ii', 'seych +ai']
 AI_OFF_COMMANDS = ['сейч -ии', 'сейчик -ии', 'сейч -ai', 'seych -ii', 'seych -ai']
 
-# Вопросы о создателе
 CREATOR_QUESTIONS = [
     'кто тебя создал', 'кто твой создатель', 'кто тебя сделал',
     'чей ты бот', 'кто твой хозяин', 'кто разработал',
     'твой создатель', 'кто создатель', 'кто тебя написал'
 ]
 
-# Вопросы об имени бота
 NAME_QUESTIONS = [
     'как тебя звать', 'как тебя зовут', 'твое имя',
     'как зовут', 'как твое имя', 'представься', 'кто ты'
 ]
 
-# Список эмодзи
 EMOJIS = ['😊', '🐓', '🤔', '👍', '👋', '💪', '🎉', '✨', '🔥', '💯', '😎', '🥳', '😅', '🤗', '💫', '⭐', '🌸', '🎈', '🤡']
 
 
@@ -323,12 +298,12 @@ def get_random_emoji():
     return random.choice(EMOJIS)
 
 
-# ========== ПОЛНЫЕ ПРАВИЛА ==========
+# ========== ПРАВИЛА ==========
 RULES_FULL = {
     '1.1': "1.1. Обязательность: Незнание правил не освобождает от ответственности.",
     '1.2': "1.2. Равенство: Все участники, включая администрацию, равны перед правилами.",
     '1.3': "1.3. Возрастное ограничения: Участие разрешено только лицам старше 16 лет. Нарушение влечет немедленное исключение (/kick).",
-    '1.4': "1.4. Порядок обжалования: Жалобы подаются в специальном обсуждении. Конфликты с администрацией запрещены.",
+    '1.4': "1.4. Порядок обжалования: Жалобы подаются в специальном обсуждении.",
     '2.1': "2.1. Мультиаккаунты: Не более 3 аккаунтов. Наказание: Бессрочная блокировка.",
     '2.4': "2.4. Помеха игре: Мут на 15 минут.",
     '3.1': "3.1. Спам и флуд: Мут на 30 минут.",
@@ -352,7 +327,6 @@ RULES_FULL = {
     '6.4': "6.4. Правила могут меняться без уведомления."
 }
 
-# Описания нарушений
 VIOLATIONS = {
     'спам': '3.1', 'флуд': '3.1', 'провокация': '3.2', 'конфликт': '3.2',
     'оскорбление участника': '3.3', 'оскорбление участников': '3.3',
@@ -442,16 +416,12 @@ def is_asking_about_name(message_text: str) -> bool:
     return False
 
 
-def is_rating_command(message_text: str) -> tuple:
-    """Проверяет команду для получения рейтинга"""
+def is_rating_command(message_text: str) -> bool:
     text_lower = message_text.lower()
-    if 'рейтинг' in text_lower or 'кто я' in text_lower:
-        return True
-    return False
+    return 'рейтинг' in text_lower or 'кто я' in text_lower
 
 
 def is_memory_command(message_text: str) -> tuple:
-    """Проверяет команду для запоминания"""
     text_lower = message_text.lower()
     if 'запомни' in text_lower:
         after_command = text_lower.split('запомни', 1)[1].strip()
@@ -462,8 +432,8 @@ def is_memory_command(message_text: str) -> tuple:
             return True, 'default', after_command
     return False, None, None
 
+
 def is_recall_command(message_text: str) -> tuple:
-    """Проверяет команду для вспоминания"""
     text_lower = message_text.lower()
     recall_patterns = ['что я говорил', 'что я сказал', 'что ты помнишь', 'что я просил запомнить']
     for pattern in recall_patterns:
@@ -483,9 +453,6 @@ def safe_text(text: str) -> str:
 
 
 def generate_ai_response(message: str, user_name: str, user_id: int) -> str:
-    """Генерация ответа через Groq с учетом рейтинга пользователя"""
-    
-    # Получаем текст без ключевого слова
     clean_message = message
     for keyword in KEYWORDS:
         if clean_message.lower().startswith(keyword):
@@ -493,57 +460,41 @@ def generate_ai_response(message: str, user_name: str, user_id: int) -> str:
             clean_message = clean_message.lstrip(',').strip()
             break
     
-    # Получаем рейтинг пользователя
     rating = get_user_rating(user_id)
     status = get_user_status(user_id)
     
-    # Проверяем команду рейтинга
     if is_rating_command(clean_message):
         return f"Вы {status} пользователь, ваш рейтинг: {rating} из 10 😊"
     
-    # Проверяем команду запоминания
     is_mem, mem_key, mem_value = is_memory_command(clean_message)
     if is_mem:
         save_memory(user_id, mem_key, mem_value)
-        emoji = get_random_emoji()
-        return f"✅ Запомнил: {mem_value} {emoji}"
+        return f"✅ Запомнил: {mem_value} {get_random_emoji()}"
     
-    # Проверяем команду вспоминания
     is_rec, rec_key = is_recall_command(clean_message)
     if is_rec:
         mem = get_memory(user_id, rec_key)
         if mem:
-            emoji = get_random_emoji()
-            return f"🔍 Ты просил запомнить: {mem} {emoji}"
+            return f"🔍 Ты просил запомнить: {mem} {get_random_emoji()}"
         else:
-            emoji = get_random_emoji()
-            return f"🤔 Я ничего не помню на эту тему. Может, ты не просил запомнить? {emoji}"
+            return f"🤔 Я ничего не помню на эту тему. {get_random_emoji()}"
     
-    # Обновляем рейтинг на основе сообщения
     update_rating_from_message(clean_message, user_id, user_name)
     
-    # Проверяем, спрашивают ли о создателе
     if is_asking_about_creator(message):
-        emoji = get_random_emoji()
-        return f"Я не хочу говорить об этом, мне кажется и вам не нужно знать! {emoji}"
+        return f"Я не хочу говорить об этом! {get_random_emoji()}"
     
-    # Проверяем, спрашивают ли как зовут
     if is_asking_about_name(message):
-        emoji = get_random_emoji()
-        return f"Меня зовут Сейч! Приятно познакомиться! {emoji}"
+        return f"Меня зовут Сейч! Приятно познакомиться! {get_random_emoji()}"
     
-    # Проверяем, спрашивают ли о конкретном пункте правил
     match = re.search(r'(\d+)[\.](\d+)', clean_message)
     if match:
         punkt = f"{match.group(1)}.{match.group(2)}"
         if punkt in RULES_FULL:
-            emoji = get_random_emoji()
-            return safe_text(f"📋 {RULES_FULL[punkt]} {emoji}")
+            return safe_text(f"📋 {RULES_FULL[punkt]} {get_random_emoji()}")
         else:
-            emoji = get_random_emoji()
-            return safe_text(f"❌ Пункта {punkt} не существует {emoji}")
+            return safe_text(f"❌ Пункта {punkt} не существует {get_random_emoji()}")
     
-    # Проверяем по описанию нарушения
     found_punkt = None
     for violation, punkt in VIOLATIONS.items():
         if violation in clean_message.lower():
@@ -551,10 +502,8 @@ def generate_ai_response(message: str, user_name: str, user_id: int) -> str:
             break
     
     if found_punkt and found_punkt in RULES_FULL:
-        emoji = get_random_emoji()
-        return safe_text(f"📋 {RULES_FULL[found_punkt]} {emoji}")
+        return safe_text(f"📋 {RULES_FULL[found_punkt]} {get_random_emoji()}")
     
-    # Формируем промпт с учетом рейтинга пользователя
     if rating <= -5:
         tone = "Ты злой, грубый, используешь маты, отвечаешь агрессивно. Пользователь к тебе плохо относится, ты отвечаешь ему тем же."
     elif rating < 0:
@@ -592,15 +541,11 @@ def generate_ai_response(message: str, user_name: str, user_id: int) -> str:
         )
         response = completion.choices[0].message.content
         response = safe_text(response)
-        
-        # Сохраняем историю
         save_message_history(user_id, clean_message, response, rating)
-        
         return response
     except Exception as e:
         logger.error(f"Ошибка Groq: {e}")
-        emoji = get_random_emoji()
-        return f"Ой, что-то пошло не так! Попробуй еще раз {emoji}"
+        return f"Ой, что-то пошло не так! Попробуй еще раз {get_random_emoji()}"
 
 
 def send_vk_message(peer_id: int, text: str, reply_to_conv_id: int = None):
@@ -644,6 +589,10 @@ def handle_message(user_id: int, message_text: str, peer_id: int,
         return
     
     user_name = get_user_name(user_id)
+    
+    # СОЗДАЕМ ПОЛЬЗОВАТЕЛЯ В БАЗЕ, ЕСЛИ ЕГО НЕТ
+    ensure_user_exists(user_id, user_name)
+    
     ai_response = generate_ai_response(message_text, user_name, user_id)
     
     if ai_response.strip():
@@ -751,9 +700,10 @@ if __name__ == '__main__':
     print("=" * 50)
     print("💬 Бот готов к работе!")
     print("=" * 50)
-    print("📋 НОВЫЕ ФУНКЦИИ:")
+    print("📋 ФУНКЦИИ:")
+    print("   ✅ Автосоздание пользователя в БД при первом сообщении")
     print("   ✅ Система рейтинга пользователей (от -10 до 10)")
-    print("   ✅ Память: 'запомни ананас' и 'что я говорил'")
+    print("   ✅ Память: 'запомни ...' и 'что я говорил'")
     print("   ✅ Адаптивный тон общения под рейтинг")
     print("   ✅ Команда 'сейч рейтинг' или 'сейч кто я'")
     print("=" * 50)
