@@ -454,13 +454,13 @@ def is_memory_command(message_text: str) -> tuple:
     """Проверяет команду для запоминания"""
     text_lower = message_text.lower()
     if 'запомни' in text_lower:
-        match = re.search(r'запомни\s+(.+?)(?:\s+как\s+|\s+под\s+|\s+на\s+)?(.+)?$', text_lower)
-        if match:
-            value = match.group(1).strip()
-            key = match.group(2).strip() if match.group(2) else 'default'
-            return True, key, value
+        after_command = text_lower.split('запомни', 1)[1].strip()
+        for word in ['как', 'под', 'на', 'что']:
+            if after_command.startswith(word):
+                after_command = after_command[len(word):].strip()
+        if after_command:
+            return True, 'default', after_command
     return False, None, None
-
 
 def is_recall_command(message_text: str) -> tuple:
     """Проверяет команду для вспоминания"""
@@ -468,9 +468,7 @@ def is_recall_command(message_text: str) -> tuple:
     recall_patterns = ['что я говорил', 'что я сказал', 'что ты помнишь', 'что я просил запомнить']
     for pattern in recall_patterns:
         if pattern in text_lower:
-            match = re.search(r'(?:что я говорил|что я сказал|что ты помнишь|что я просил запомнить)\s+(?:про\s+)?(.+)?$', text_lower)
-            key = match.group(1).strip() if match and match.group(1) else 'default'
-            return True, key
+            return True, 'default'
     return False, None
 
 
