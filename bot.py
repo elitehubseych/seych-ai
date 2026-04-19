@@ -380,6 +380,7 @@ def check_ai_command(message_text: str) -> tuple:
 
 
 def is_bot_mentioned(message_text: str) -> bool:
+    """Проверяет, нужно ли активировать бота (только для обычных сообщений)"""
     if not message_text:
         return False
     text_lower = message_text.lower().strip()
@@ -573,6 +574,7 @@ def handle_message(user_id: int, message_text: str, peer_id: int,
     if not message_text:
         return
     
+    # Проверка команд ИИ
     is_command, command_action = check_ai_command(message_text)
     if is_command:
         if command_action == 'on':
@@ -584,13 +586,30 @@ def handle_message(user_id: int, message_text: str, peer_id: int,
     if not is_ai_enabled(peer_id):
         return
     
-    should_reply = is_bot_mentioned(message_text)
+    # ========== ГЛАВНАЯ ЛОГИКА АКТИВАЦИИ ==========
+    # Правило 1: Если пользователь ответил на сообщение бота (реплай/цитата) - отвечаем ВСЕГДА
+    # Правило 2: Если это НЕ реплай, то проверяем наличие ключевого слова "Сейч" в начале сообщения
+    
+    should_reply = False
+    
+    if is_reply_to_bot:
+        # Это реплай на сообщение бота - отвечаем всегда, даже без ключевого слова
+        should_reply = True
+        logger.info(f"🔁 Ответ на сообщение бота (реплай) - отвечаю")
+    else:
+        # Это не реплай, проверяем наличие ключевого слова "Сейч" в начале
+        if is_bot_mentioned(message_text):
+            should_reply = True
+            logger.info(f"✅ Найдено ключевое слово в начале сообщения - отвечаю")
+        else:
+            logger.info(f"❌ Нет реплая и нет ключевого слова - не отвечаю")
+    
     if not should_reply:
         return
     
     user_name = get_user_name(user_id)
     
-    # СОЗДАЕМ ПОЛЬЗОВАТЕЛЯ В БАЗЕ, ЕСЛИ ЕГО НЕТ
+    # Создаем пользователя в базе, если его нет
     ensure_user_exists(user_id, user_name)
     
     ai_response = generate_ai_response(message_text, user_name, user_id)
@@ -659,9 +678,27 @@ def callback_handler():
             if user_id == -VK_GROUP_ID:
                 return 'ok', 200
             
+            # ========== ПРОВЕРКА РЕПЛАЯ НА БОТА ==========
+            is_reply_to_bot = False
+            
+            # Проверяем через reply_message
+            if 'reply_message' in message_obj:
+                reply_msg = message_obj['reply_message']
+                if reply_msg and reply_msg.get('from_id') == -VK_GROUP_ID:
+                    is_reply_to_bot = True
+                    logger.info(f"🔁 Обнаружен реплай на бота (через reply_message)")
+            
+            # Проверяем через fwd_messages
+            if not is_reply_to_bot and 'fwd_messages' in message_obj:
+                for fwd in message_obj['fwd_messages']:
+                    if fwd.get('from_id') == -VK_GROUP_ID:
+                        is_reply_to_bot = True
+                        logger.info(f"🔁 Обнаружен реплай на бота (через fwd_messages)")
+                        break
+            
             threading.Thread(
                 target=handle_message,
-                args=(user_id, message_text, peer_id, conv_msg_id, False),
+                args=(user_id, message_text, peer_id, conv_msg_id, is_reply_to_bot),
                 daemon=True
             ).start()
             
@@ -699,6 +736,10 @@ if __name__ == '__main__':
     print(f"💾 База данных: {'✅ ПОДКЛЮЧЕНА' if db_available else '❌ НЕДОСТУПНА'}")
     print("=" * 50)
     print("💬 Бот готов к работе!")
+    print("=" * 50)
+    print("📋 ПРАВИЛА АКТИВАЦИИ:")
+    print("   🔁 Реплай на сообщение бота → ОТВЕЧАЮ ВСЕГДА (без ключевого слова)")
+    print("   💬 Обычное новое сообщение → ОТВЕЧАЮ только если есть 'Сейч' в начале")
     print("=" * 50)
     print("📋 ФУНКЦИИ:")
     print("   ✅ Автосоздание пользователя в БД при первом сообщении")
