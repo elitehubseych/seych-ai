@@ -7,8 +7,6 @@ import re
 import requests
 import random
 from datetime import datetime, timedelta
-from pytz import timezone as pytz_timezone, all_timezones
-import pytz
 
 from flask import Flask, request, jsonify
 import vk_api
@@ -44,251 +42,6 @@ werkzeug_logger = logging.getLogger('werkzeug')
 werkzeug_logger.setLevel(logging.ERROR)
 httpx_logger = logging.getLogger('httpx')
 httpx_logger.setLevel(logging.WARNING)
-
-# ========== СЛОВАРЬ ГОРОДОВ И ИХ ЧАСОВЫХ ПОЯСОВ ==========
-CITY_TIMEZONES = {
-    # Россия
-    'москва': 'Europe/Moscow',
-    'moscow': 'Europe/Moscow',
-    'спб': 'Europe/Moscow',
-    'санкт-петербург': 'Europe/Moscow',
-    'st petersburg': 'Europe/Moscow',
-    'новосибирск': 'Asia/Novosibirsk',
-    'новосибирск': 'Asia/Novosibirsk',
-    'екатеринбург': 'Asia/Yekaterinburg',
-    'ekaterinburg': 'Asia/Yekaterinburg',
-    'казань': 'Europe/Moscow',
-    'kazan': 'Europe/Moscow',
-    'нижний новгород': 'Europe/Moscow',
-    'n novgorod': 'Europe/Moscow',
-    'самара': 'Europe/Samara',
-    'samara': 'Europe/Samara',
-    'омск': 'Asia/Omsk',
-    'omsk': 'Asia/Omsk',
-    'челябинск': 'Asia/Yekaterinburg',
-    'chelyabinsk': 'Asia/Yekaterinburg',
-    'ростов': 'Europe/Moscow',
-    'rostov': 'Europe/Moscow',
-    'уфа': 'Asia/Yekaterinburg',
-    'ufa': 'Asia/Yekaterinburg',
-    'волгоград': 'Europe/Volgograd',
-    'volgograd': 'Europe/Volgograd',
-    'пермь': 'Asia/Yekaterinburg',
-    'perm': 'Asia/Yekaterinburg',
-    'красноярск': 'Asia/Krasnoyarsk',
-    'krasnoyarsk': 'Asia/Krasnoyarsk',
-    'воронеж': 'Europe/Moscow',
-    'voronezh': 'Europe/Moscow',
-    'владивосток': 'Asia/Vladivostok',
-    'vladivostok': 'Asia/Vladivostok',
-    
-    # Страны СНГ
-    'киев': 'Europe/Kiev',
-    'kiev': 'Europe/Kiev',
-    'kyiv': 'Europe/Kiev',
-    'харьков': 'Europe/Kiev',
-    'kharkiv': 'Europe/Kiev',
-    'одесса': 'Europe/Kiev',
-    'odessa': 'Europe/Kiev',
-    'минск': 'Europe/Minsk',
-    'minsk': 'Europe/Minsk',
-    'астана': 'Asia/Almaty',
-    'astana': 'Asia/Almaty',
-    'алматы': 'Asia/Almaty',
-    'almaty': 'Asia/Almaty',
-    'ташкент': 'Asia/Tashkent',
-    'tashkent': 'Asia/Tashkent',
-    'баку': 'Asia/Baku',
-    'baku': 'Asia/Baku',
-    'тбилиси': 'Asia/Tbilisi',
-    'tbilisi': 'Asia/Tbilisi',
-    'ереван': 'Asia/Yerevan',
-    'yerevan': 'Asia/Yerevan',
-    'кишинев': 'Europe/Chisinau',
-    'chisinau': 'Europe/Chisinau',
-    'бишкек': 'Asia/Bishkek',
-    'bishkek': 'Asia/Bishkek',
-    'душанбе': 'Asia/Dushanbe',
-    'dushanbe': 'Asia/Dushanbe',
-    'ашхабад': 'Asia/Ashgabat',
-    'ashgabat': 'Asia/Ashgabat',
-    
-    # Европа
-    'лондон': 'Europe/London',
-    'london': 'Europe/London',
-    'париж': 'Europe/Paris',
-    'paris': 'Europe/Paris',
-    'берлин': 'Europe/Berlin',
-    'berlin': 'Europe/Berlin',
-    'рим': 'Europe/Rome',
-    'rome': 'Europe/Rome',
-    'мадрид': 'Europe/Madrid',
-    'madrid': 'Europe/Madrid',
-    'афины': 'Europe/Athens',
-    'athens': 'Europe/Athens',
-    'стамбул': 'Europe/Istanbul',
-    'istanbul': 'Europe/Istanbul',
-    'варшава': 'Europe/Warsaw',
-    'warsaw': 'Europe/Warsaw',
-    'прага': 'Europe/Prague',
-    'prague': 'Europe/Prague',
-    'будапешт': 'Europe/Budapest',
-    'budapest': 'Europe/Budapest',
-    'вен': 'Europe/Vienna',
-    'vienna': 'Europe/Vienna',
-    'а амстердам': 'Europe/Amsterdam',
-    'amsterdam': 'Europe/Amsterdam',
-    'брюссель': 'Europe/Brussels',
-    'brussels': 'Europe/Brussels',
-    'стокгольм': 'Europe/Stockholm',
-    'stockholm': 'Europe/Stockholm',
-    'осло': 'Europe/Oslo',
-    'oslo': 'Europe/Oslo',
-    'копенгаген': 'Europe/Copenhagen',
-    'copenhagen': 'Europe/Copenhagen',
-    'хельсинки': 'Europe/Helsinki',
-    'helsinki': 'Europe/Helsinki',
-    
-    # Азия
-    'пекин': 'Asia/Shanghai',
-    'beijing': 'Asia/Shanghai',
-    'шанхай': 'Asia/Shanghai',
-    'shanghai': 'Asia/Shanghai',
-    'токио': 'Asia/Tokyo',
-    'tokyo': 'Asia/Tokyo',
-    'сеул': 'Asia/Seoul',
-    'seoul': 'Asia/Seoul',
-    'дели': 'Asia/Kolkata',
-    'delhi': 'Asia/Kolkata',
-    'bombay': 'Asia/Kolkata',
-    'джакарта': 'Asia/Jakarta',
-    'jakarta': 'Asia/Jakarta',
-    'банкок': 'Asia/Bangkok',
-    'bangkok': 'Asia/Bangkok',
-    'сингапур': 'Asia/Singapore',
-    'singapore': 'Asia/Singapore',
-    'гонконг': 'Asia/Hong_Kong',
-    'hongkong': 'Asia/Hong_Kong',
-    'hong kong': 'Asia/Hong_Kong',
-    'тайбэй': 'Asia/Taipei',
-    'taipei': 'Asia/Taipei',
-    
-    # Америка
-    'нью-йорк': 'America/New_York',
-    'new york': 'America/New_York',
-    'ny': 'America/New_York',
-    'лос-анджелес': 'America/Los_Angeles',
-    'los angeles': 'America/Los_Angeles',
-    'la': 'America/Los_Angeles',
-    'чикаго': 'America/Chicago',
-    'chicago': 'America/Chicago',
-    'хи сан-франциско': 'America/Los_Angeles',
-    'san francisco': 'America/Los_Angeles',
-    'торонто': 'America/Toronto',
-    'toronto': 'America/Toronto',
-    'монреаль': 'America/Montreal',
-    'montreal': 'America/Montreal',
-    'ванкувер': 'America/Vancouver',
-    'vancouver': 'America/Vancouver',
-    'мехико': 'America/Mexico_City',
-    'mexico': 'America/Mexico_City',
-    'мехико сити': 'America/Mexico_City',
-    'сан-паулу': 'America/Sao_Paulo',
-    'sao paulo': 'America/Sao_Paulo',
-    'буэнос-айрес': 'America/Argentina/Buenos_Aires',
-    'buenos aires': 'America/Argentina/Buenos_Aires',
-    
-    # Другие
-    'сидней': 'Australia/Sydney',
-    'sydney': 'Australia/Sydney',
-    'мельбурн': 'Australia/Melbourne',
-    'melbourne': 'Australia/Melbourne',
-    'дубай': 'Asia/Dubai',
-    'dubai': 'Asia/Dubai',
-    'доха': 'Asia/Qatar',
-    'doha': 'Asia/Qatar',
-    'тель-авив': 'Asia/Jerusalem',
-    'tel aviv': 'Asia/Jerusalem',
-    'каир': 'Africa/Cairo',
-    'cairo': 'Africa/Cairo',
-    'йоханнесбург': 'Africa/Johannesburg',
-    'johannesburg': 'Africa/Johannesburg',
-}
-
-# Синонимы для запросов времени
-TIME_KEYWORDS = ['время', 'сколько время', 'который час', 'час', 'какое время', 'текущее время', 'покажи время']
-
-
-def get_time_in_city(city_name: str = None) -> str:
-    """
-    Возвращает текущее время в указанном городе.
-    Если город не указан или не найден, возвращает время по Москве.
-    """
-    if city_name:
-        city_lower = city_name.lower().strip()
-        # Ищем город в словаре
-        tz_name = None
-        for city, tz in CITY_TIMEZONES.items():
-            if city in city_lower or city_lower in city:
-                tz_name = tz
-                break
-        
-        if tz_name:
-            try:
-                tz = pytz_timezone(tz_name)
-                now = datetime.now(tz)
-                time_str = now.strftime("%H:%M:%S")
-                date_str = now.strftime("%d.%m.%Y")
-                return f"🕐 В {city_name.capitalize()} сейчас {time_str} ({date_str})"
-            except Exception as e:
-                logger.error(f"Ошибка получения времени для {city_name}: {e}")
-                return get_time_in_city()
-        else:
-            # Город не найден, возвращаем время по МСК
-            return get_time_in_city()
-    else:
-        # Время по Москве (UTC+3)
-        tz = pytz_timezone('Europe/Moscow')
-        now = datetime.now(tz)
-        time_str = now.strftime("%H:%M:%S")
-        date_str = now.strftime("%d.%m.%Y")
-        return f"🕐 В Москве сейчас {time_str} ({date_str})"
-
-
-def is_time_question(message_text: str) -> tuple:
-    """
-    Проверяет, является ли сообщение вопросом о времени.
-    Возвращает (True, city) или (False, None)
-    """
-    message_lower = message_text.lower()
-    
-    # Проверяем ключевые слова времени
-    is_time = any(keyword in message_lower for keyword in TIME_KEYWORDS)
-    if not is_time:
-        return False, None
-    
-    # Ищем упоминание города
-    # Паттерны: "время в москве", "сколько время в лондоне", "который час в париже"
-    city_patterns = [
-        r'в\s+([а-яА-ЯёЁa-zA-Z\-\s]+?)(?:\?|$|\,|\.)',
-        r'врем(?:я|ени)\s+в\s+([а-яА-ЯёЁa-zA-Z\-\s]+?)(?:\?|$|\,|\.)',
-        r'час\s+в\s+([а-яА-ЯёЁa-zA-Z\-\s]+?)(?:\?|$|\,|\.)',
-    ]
-    
-    for pattern in city_patterns:
-        match = re.search(pattern, message_lower)
-        if match:
-            city = match.group(1).strip()
-            # Очищаем от лишних слов
-            for stop_word in ['сейчас', 'пожалуйста', 'скажи', 'покажи', 'узнай']:
-                city = city.replace(stop_word, '')
-            city = city.strip()
-            if city:
-                return True, city
-    
-    # Если город не указан, но есть ключевые слова времени
-    return True, None
-
 
 # ========== ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ==========
 conn = None
@@ -708,11 +461,6 @@ def generate_ai_response(message: str, user_name: str, user_id: int) -> str:
             clean_message = clean_message.lstrip(',').strip()
             break
     
-    # ========== ПРОВЕРКА ВОПРОСА О ВРЕМЕНИ ==========
-    is_time, city = is_time_question(clean_message)
-    if is_time:
-        return get_time_in_city(city)
-    
     rating = get_user_rating(user_id)
     status = get_user_status(user_id)
     
@@ -757,6 +505,7 @@ def generate_ai_response(message: str, user_name: str, user_id: int) -> str:
     if found_punkt and found_punkt in RULES_FULL:
         return safe_text(f"📋 {RULES_FULL[found_punkt]} {get_random_emoji()}")
     
+    # Определяем тон общения на основе рейтинга
     if rating <= -5:
         tone = "Ты злой, грубый, используешь маты, отвечаешь агрессивно. Пользователь к тебе плохо относится, ты отвечаешь ему тем же."
     elif rating < 0:
@@ -772,15 +521,20 @@ def generate_ai_response(message: str, user_name: str, user_id: int) -> str:
 
 ТВОЙ ТОН ОБЩЕНИЯ: {tone}
 
+ВАЖНЫЕ ПРАВИЛА:
+- НИКОГДА не говори "Я не могу ответить на этот вопрос" или "Я не знаю"
+- НИКОГДА не отказывай в ответе
 - НИКОГДА не говори о правилах, если не спросили
 - НИКОГДА не говори о создателе
-- Отвечай естественно, как в реальном чате
+- Отвечай на ЛЮБЫЕ вопросы, даже если они сложные или странные
+- Если вопрос требует твоего мнения — выскажи его
+- Будь полезным, даже если вопрос глупый
 
 ОТВЕЧАЙ 2-4 предложениями. Используй 1-2 РАЗНЫХ эмодзи.
 
 Пользователь написал: "{clean_message}"
 
-Ответь естественно, в заданном тоне."""
+Ответь естественно, в заданном тоне. НЕ ОТКАЗЫВАЙ В ОТВЕТЕ!"""
     
     try:
         completion = groq_client.chat.completions.create(
@@ -798,7 +552,7 @@ def generate_ai_response(message: str, user_name: str, user_id: int) -> str:
         return response
     except Exception as e:
         logger.error(f"Ошибка Groq: {e}")
-        return f"Ой, что-то пошло не так! Попробуй еще раз {get_random_emoji()}"
+        return f"😊 {get_random_emoji()}"
 
 
 def send_vk_message(peer_id: int, text: str, reply_to_conv_id: int = None):
@@ -839,17 +593,12 @@ def handle_message(user_id: int, message_text: str, peer_id: int,
         return
     
     # ========== ГЛАВНАЯ ЛОГИКА АКТИВАЦИИ ==========
-    # Правило 1: Если пользователь ответил на сообщение бота (реплай/цитата) - отвечаем ВСЕГДА
-    # Правило 2: Если это НЕ реплай, то проверяем наличие ключевого слова "Сейч" в начале сообщения
-    
     should_reply = False
     
     if is_reply_to_bot:
-        # Это реплай на сообщение бота - отвечаем всегда, даже без ключевого слова
         should_reply = True
         logger.info(f"🔁 Ответ на сообщение бота (реплай) - отвечаю")
     else:
-        # Это не реплай, проверяем наличие ключевого слова "Сейч" в начале
         if is_bot_mentioned(message_text):
             should_reply = True
             logger.info(f"✅ Найдено ключевое слово в начале сообщения - отвечаю")
@@ -989,12 +738,6 @@ if __name__ == '__main__':
     print("=" * 50)
     print("💬 Бот готов к работе!")
     print("=" * 50)
-    print("📋 НОВАЯ ФУНКЦИЯ - ОПРЕДЕЛЕНИЕ ВРЕМЕНИ:")
-    print("   ✅ 'Сейч сколько время' - время в Москве")
-    print("   ✅ 'Сейч время в Лондоне' - время в Лондоне")
-    print("   ✅ 'Сейч который час в Нью-Йорке' - время в Нью-Йорке")
-    print("   ✅ Поддерживаются все города мира!")
-    print("=" * 50)
     print("📋 ПРАВИЛА АКТИВАЦИИ:")
     print("   🔁 Реплай на сообщение бота → ОТВЕЧАЮ ВСЕГДА (без ключевого слова)")
     print("   💬 Обычное новое сообщение → ОТВЕЧАЮ только если есть 'Сейч' в начале")
@@ -1005,6 +748,7 @@ if __name__ == '__main__':
     print("   ✅ Память: 'запомни ...' и 'что я говорил'")
     print("   ✅ Адаптивный тон общения под рейтинг")
     print("   ✅ Команда 'сейч рейтинг' или 'сейч кто я'")
+    print("   ✅ Отвечает на ЛЮБЫЕ вопросы без отказов")
     print("=" * 50)
     
     app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
